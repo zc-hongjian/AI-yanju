@@ -1,0 +1,9 @@
+langgraph>=1.0,<2
+openai>=1.40
+requests>=2.31
+charset-normalizer>=3.0
+beautifulsoup4>=4.12
+python-dotenv>=1.0
+fastapi>=0.110
+uvicorn>=0.30
+pytest>=8.0

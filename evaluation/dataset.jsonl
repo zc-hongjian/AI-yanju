@@ -1,0 +1,40 @@
+{"id": "Q01", "category": "simple_fact", "question": "LangGraph 是什么？它主要解决什么问题？", "expected_facts": ["LangGraph 是用于构建有状态、多参与者 LLM 应用的编排框架", "LangGraph 用图结构组织节点与边并支持状态持久化"]}
+{"id": "Q02", "category": "simple_fact", "question": "LangGraph 的 interrupt 函数有什么作用？", "expected_facts": ["interrupt 函数用于在图执行过程中暂停并等待人工输入", "interrupt 依赖 checkpointer 保存状态以便恢复"]}
+{"id": "Q03", "category": "simple_fact", "question": "RAG（检索增强生成）的基本原理是什么？", "expected_facts": ["RAG 先检索外部知识再交给大模型生成回答", "RAG 可以降低幻觉并让知识保持可更新"]}
+{"id": "Q04", "category": "simple_fact", "question": "AI Agent 与普通聊天机器人的区别是什么？", "expected_facts": ["AI Agent 能规划并调用工具完成多步任务", "普通聊天机器人主要进行对话生成而不主动执行任务"]}
+{"id": "Q05", "category": "simple_fact", "question": "Function Calling 在 LLM 应用中的作用是什么？", "expected_facts": ["Function Calling 让模型输出结构化的工具调用参数", "应用执行工具后把结果回传给模型继续推理"]}
+{"id": "Q06", "category": "simple_fact", "question": "MCP（Model Context Protocol）是什么？", "expected_facts": ["MCP 是连接大模型与外部工具或数据源的开放协议", "MCP 通过标准化接口降低工具集成成本"]}
+{"id": "Q07", "category": "simple_fact", "question": "checkpointer 在 LangGraph 中起什么作用？", "expected_facts": ["checkpointer 持久化图的每一步状态", "有了 checkpointer 才能按 thread_id 恢复中断后的执行"]}
+{"id": "Q08", "category": "simple_fact", "question": "向量数据库在 RAG 中承担什么角色？", "expected_facts": ["向量数据库存储文本嵌入并支持相似度检索", "向量数据库为 RAG 提供语义召回能力"]}
+{"id": "Q09", "category": "simple_fact", "question": "Prompt Engineering 中的 few-shot 是什么？", "expected_facts": ["few-shot 在提示词中给出少量示例引导模型输出", "few-shot 能提升格式遵循与任务准确率"]}
+{"id": "Q10", "category": "simple_fact", "question": "Transformer 的核心机制是什么？", "expected_facts": ["Transformer 使用自注意力机制建模序列", "Transformer 可以并行处理序列并捕捉长距离依赖"]}
+{"id": "Q11", "category": "comparison", "question": "LangGraph 和 CrewAI 在智能体编排方式上有什么区别？", "expected_facts": ["LangGraph 以图和工作流编排为核心", "CrewAI 以角色化多智能体协作为核心"]}
+{"id": "Q12", "category": "comparison", "question": "RAG 与微调（fine-tuning）分别适合什么场景？", "expected_facts": ["RAG 适合知识频繁更新且需要引用来源的场景", "微调适合固定领域风格和行为的场景"]}
+{"id": "Q13", "category": "comparison", "question": "向量检索与关键词检索（BM25）各有什么优缺点？", "expected_facts": ["向量检索擅长语义相似但可解释性较弱", "BM25 擅长关键词精确匹配且无需训练"]}
+{"id": "Q14", "category": "comparison", "question": "LangChain 和 LlamaIndex 的定位有什么不同？", "expected_facts": ["LangChain 提供通用的 LLM 应用编排组件", "LlamaIndex 更聚焦数据接入与检索索引"]}
+{"id": "Q15", "category": "comparison", "question": "多智能体协作与单智能体工作流在实现复杂度上的差异？", "expected_facts": ["多智能体协作的实现复杂度更高但职责更清晰", "单智能体工作流更容易调试和上线"]}
+{"id": "Q16", "category": "comparison", "question": "本地部署大模型与调用云端 API 在企业场景下如何取舍？", "expected_facts": ["本地部署数据不出域但运维负担更重", "云端 API 弹性好但存在数据合规与成本波动"]}
+{"id": "Q17", "category": "comparison", "question": "GPT-4o 与 Claude 3.5 在多模态能力上的差异？", "expected_facts": ["GPT-4o 支持文本图像音频等多种模态输入输出", "Claude 系列在长文本理解与安全性方面表现突出"]}
+{"id": "Q18", "category": "comparison", "question": "私有化知识库与公开搜索引擎在 RAG 中的效果差异？", "expected_facts": ["私有知识库能覆盖企业专有信息但更新依赖内部流程", "公开搜索覆盖面广但噪声与不可控性更高"]}
+{"id": "Q19", "category": "comparison", "question": "ReAct 与 Plan-and-Execute 两种 Agent 范式的区别？", "expected_facts": ["ReAct 交替进行推理与行动逐步推进任务", "Plan-and-Execute 先生成计划再分步执行"]}
+{"id": "Q20", "category": "comparison", "question": "流式输出与非流式输出在 Agent 产品体验上的差异？", "expected_facts": ["流式输出降低首字延迟并改善交互体验", "非流式输出实现简单但等待时间更长"]}
+{"id": "Q21", "category": "timeliness", "question": "2025 年 AI Agent 在企业落地的主要挑战是什么？", "expected_facts": ["2025 年企业落地 Agent 的主要挑战包括数据质量与系统集成", "合规与安全治理是 2025 年企业采用 Agent 的重要挑战"]}
+{"id": "Q22", "category": "timeliness", "question": "2025 年大模型推理成本下降的主要原因是什么？", "expected_facts": ["推理成本下降主要来自模型蒸馏与量化优化", "推理芯片与规模化部署降低了单位 token 成本"]}
+{"id": "Q23", "category": "timeliness", "question": "2025 年企业采用 AI Agent 的典型场景有哪些？", "expected_facts": ["客户服务与知识问答是企业采用 Agent 的典型场景", "代码辅助与流程自动化也是常见落地场景"]}
+{"id": "Q24", "category": "timeliness", "question": "2025 年开源大模型与闭源大模型的差距变化如何？", "expected_facts": ["2025 年开源模型在通用能力上快速逼近闭源模型", "闭源模型在多模态与生态工具上仍有优势"]}
+{"id": "Q25", "category": "timeliness", "question": "2025 年 AI 编程助手在企业中的渗透情况如何？", "expected_facts": ["AI 编程助手在开发者中的采用率持续上升", "企业在代码审查与安全合规方面仍保持谨慎"]}
+{"id": "Q26", "category": "timeliness", "question": "2025 年数据隐私监管对 AI Agent 落地有什么影响？", "expected_facts": ["数据跨境与个人信息保护法规影响 Agent 的数据处理方式", "企业需要为 Agent 建立可审计的数据使用边界"]}
+{"id": "Q27", "category": "timeliness", "question": "2025 年多模态大模型的最新进展有哪些？", "expected_facts": ["2025 年多模态模型在图像与视频理解上持续提升", "多模态 Agent 开始用于文档解析与视觉质检"]}
+{"id": "Q28", "category": "timeliness", "question": "2025 年 AI Agent 的安全风险主要有哪些？", "expected_facts": ["Agent 的主要安全风险包括提示注入与工具滥用", "权限过大与数据泄露是 Agent 落地的关键风险"]}
+{"id": "Q29", "category": "timeliness", "question": "2025 年企业 RAG 项目失败的主要原因是什么？", "expected_facts": ["RAG 项目失败常源于数据质量差与检索召回不足", "缺乏评测体系和持续维护会导致 RAG 效果衰减"]}
+{"id": "Q30", "category": "timeliness", "question": "2025 年智能体（Agent）产品的商业化进展如何？", "expected_facts": ["Agent 产品开始从演示走向订阅与按量计费", "企业级 Agent 商业化仍受可靠性与合规约束"]}
+{"id": "Q31", "category": "multi_hop", "question": "LangGraph 的 checkpointer 如何配合 interrupt 实现人工中断？", "expected_facts": ["checkpointer 保存 interrupt 前的状态供后续恢复", "恢复时用 Command(resume=...) 从断点继续执行"]}
+{"id": "Q32", "category": "multi_hop", "question": "为什么企业采用 RAG 后仍然需要微调？", "expected_facts": ["RAG 解决知识时效与引用但难以改变模型行为风格", "微调可以提升特定任务的格式遵循与领域表达"]}
+{"id": "Q33", "category": "multi_hop", "question": "一个 AI Agent 从原型到生产需要解决哪些工程问题？", "expected_facts": ["生产化需要解决评测、监控、权限与成本控制", "需要为 Agent 建立失败重试与人工兜底机制"]}
+{"id": "Q34", "category": "multi_hop", "question": "搜索工具与网页抓取在 Agent 工作流中如何配合完成研究任务？", "expected_facts": ["搜索工具产出候选 URL 供抓取工具读取正文", "抓取正文后提取证据并标注来源链接"]}
+{"id": "Q35", "category": "multi_hop", "question": "为什么 LLM 会产生幻觉？如何用 RAG 和引用校验降低幻觉？", "expected_facts": ["幻觉源于模型生成不受约束的内容", "RAG 结合逐字引用校验可以降低幻觉风险"]}
+{"id": "Q36", "category": "multi_hop", "question": "Function Calling 失败时，Agent 应该如何重试和降级？", "expected_facts": ["工具调用失败时应按指数退避重试并记录错误", "确定性失败应直接降级而不是无限重试"]}
+{"id": "Q37", "category": "multi_hop", "question": "多智能体系统为什么需要状态持久化与人工审核？", "expected_facts": ["多智能体协作需要共享状态避免上下文丢失", "高风险动作需要人工审核后再执行"]}
+{"id": "Q38", "category": "multi_hop", "question": "如何评估一个 RAG 系统是否达到可用标准？", "expected_facts": ["RAG 评估需要覆盖检索召回率与答案忠实度", "引用可追溯率是判断 RAG 是否可用的关键指标"]}
+{"id": "Q39", "category": "multi_hop", "question": "为什么长上下文模型不能完全替代 RAG？", "expected_facts": ["长上下文仍受窗口上限与成本约束", "RAG 可以按需检索并降低无关上下文干扰"]}
+{"id": "Q40", "category": "multi_hop", "question": "企业落地 Agent 时，如何平衡自动化效率与人工确认？", "expected_facts": ["按风险分级决定哪些动作需要人工确认", "用可观测日志和回滚机制降低人工确认成本"]}

@@ -1,0 +1,1027 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LangGraph 研究助手</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --ink: #17202a;
+    --muted: #6b7785;
+    --line: #e3e8ef;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --green: #0f9d58;
+    --amber: #b7791f;
+    --red: #d93025;
+    --gray: #8a94a6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.65 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  header.top {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+    color: #fff;
+    padding: 26px 0 22px;
+  }
+  .top-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 12px;
+    background: rgba(255,255,255,.16);
+    display: grid; place-items: center;
+    font-size: 22px; font-weight: 700;
+  }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+  .sub { margin: 2px 0 0; font-size: 13px; opacity: .82; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.25);
+    white-space: nowrap;
+  }
+  main { padding: 22px 0 40px; display: grid; gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; box-shadow: 0 6px 18px rgba(23,32,42,.04);
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .card-head h2 { margin: 0; font-size: 16px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+  .ask-row { display: flex; gap: 12px; align-items: stretch; }
+  textarea, input {
+    width: 100%; font: inherit; color: var(--ink);
+    background: #fbfcfe; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; outline: none; transition: border-color .15s;
+  }
+  textarea:focus, input:focus { border-color: var(--accent); background: #fff; }
+  .ask-row textarea { resize: vertical; min-height: 58px; }
+  .btn {
+    font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap;
+    border-radius: 10px; padding: 10px 18px; border: 1px solid transparent;
+    transition: filter .15s, background .15s;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
+  .btn.ghost { background: #fff; color: var(--ink); border-color: var(--line); }
+  .btn.ghost:hover:not(:disabled) { background: #f3f6fb; }
+  .btn.danger { background: #fff; color: var(--red); border-color: #f3c5c1; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid2 label { font-size: 13px; color: var(--muted); font-weight: 600; }
+  .grid2 input { margin-top: 6px; }
+  .tag {
+    font-size: 12px; color: var(--amber); background: #fff7e6;
+    border: 1px solid #f6dfae; padding: 2px 9px; border-radius: 999px;
+  }
+  .alert {
+    background: #fdecea; border: 1px solid #f5c2bd; color: #a61b12;
+    border-radius: 12px; padding: 12px 16px; font-size: 14px;
+  }
+  .banner {
+    background: #fff7e6; border: 1px solid #f6dfae; color: #8a5a00;
+    border-radius: 12px; padding: 10px 14px; font-size: 13.5px;
+  }
+  .banner code { background: rgba(138, 90, 0, .1); padding: 1px 5px; border-radius: 5px; }
+  .draft { max-height: 460px; overflow: auto; padding-right: 6px; }
+  .draft h2 { font-size: 20px; margin: 14px 0 8px; }
+  .draft h3 { font-size: 16px; margin: 14px 0 6px; }
+  .draft h4, .draft h5 { font-size: 14px; margin: 12px 0 4px; }
+  .draft p { margin: 8px 0; }
+  .draft ul { margin: 8px 0; padding-left: 22px; }
+  .draft ol { margin: 8px 0; padding-left: 24px; }
+  .draft li { margin: 4px 0; }
+  .draft a { color: var(--accent); text-decoration: none; }
+  .draft a:hover { text-decoration: underline; }
+  .draft blockquote { margin: 10px 0; padding: 6px 12px; border-left: 3px solid var(--accent-soft); color: var(--muted); }
+  .md-table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+  .md-table th, .md-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .md-table th { background: #f7f9fc; }
+  pre {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font: 12.5px/1.55 "Cascadia Mono", Consolas, monospace;
+    background: #f8fafc; border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px; max-height: 300px; overflow: auto;
+  }
+  .preview { margin-top: 10px; }
+  .preview summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .log-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .log-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .log-table th {
+    position: sticky; top: 0; background: #f7f9fc; text-align: left;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600;
+  }
+  .log-table td { padding: 7px 10px; border-bottom: 1px solid #f1f4f8; vertical-align: top; }
+  .log-table tr:last-child td { border-bottom: none; }
+  .log-error {
+    max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #b03a2e; font-size: 12px;
+  }
+  .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+  .state {
+    display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .state.ok { color: var(--green); background: #e9f7ef; border-color: #c3e9d3; }
+  .state.degraded { color: var(--amber); background: #fff7e6; border-color: #f6dfae; }
+  .state.error, .state.rejected { color: var(--red); background: #fdecea; border-color: #f5c2bd; }
+  .state.skipped { color: var(--gray); background: #f2f4f7; border-color: #e3e8ef; }
+  .state.approved { color: var(--accent); background: var(--accent-soft); border-color: #cfe0fd; }
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 0 0 6px; }
+  .meta div { background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .meta dt { color: var(--muted); font-size: 12px; }
+  .meta dd { margin: 3px 0 0; font-weight: 600; font-size: 14px; }
+  .err-list { margin: 8px 0 0; padding-left: 20px; color: #a61b12; font-size: 13px; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 0 0 30px; }
+  @media (max-width: 720px) {
+    .ask-row { flex-direction: column; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-inner">
+    <div class="brand">
+      <div class="logo">研</div>
+      <div>
+        <h1>LangGraph 研究助手</h1>
+        <p class="sub">检索 → 抓取 → 证据 → 报告草稿 → 人工确认 → 邮件 / Notion</p>
+      </div>
+    </div>
+    <div class="pills">
+      <span class="pill" id="mode-pill">模式检测中</span>
+      <span class="pill" id="thread-pill" hidden></span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="demo-banner" class="banner" hidden>
+    当前为 <strong>静态演示模式</strong>：页面数据是示例，未连接后端。
+    运行 <code>python web.py</code> 后访问 <code>http://127.0.0.1:8000</code> 可跑真实研究流程。
+  </div>
+
+  <section class="card">
+    <label class="label" for="question">研究问题</label>
+    <div class="ask-row">
+      <textarea id="question" rows="2" placeholder="例如：LangGraph 如何实现人工中断（human-in-the-loop）？"></textarea>
+      <button id="start-btn" class="btn primary">开始研究</button>
+    </div>
+    <p class="hint">写操作（发邮件 / 存 Notion）只有在你逐项确认后才会执行；未配置凭据时写入 outbox/（dry-run）。</p>
+  </section>
+
+  <div id="error" class="alert" hidden></div>
+
+  <section class="card" id="progress-card" hidden>
+    <div class="card-head">
+      <h2>执行进度</h2>
+      <span class="muted" id="progress-text">处理中…</span>
+    </div>
+    <div class="log-wrap">
+      <table class="log-table">
+        <thead>
+          <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="draft-card" hidden>
+    <div class="card-head">
+      <h2>① 草稿审核</h2>
+      <span class="muted" id="draft-meta"></span>
+    </div>
+    <div class="draft" id="draft-body"></div>
+    <div class="actions">
+      <button class="btn primary" id="draft-approve">通过并继续</button>
+      <button class="btn ghost" id="draft-revise-toggle">修改意见</button>
+      <button class="btn danger" id="draft-terminate">终止流程</button>
+    </div>
+    <div id="revise-box" hidden>
+      <textarea id="revise-text" rows="3" placeholder="写下修改意见，Agent 会据此重新生成草稿"></textarea>
+      <div class="actions"><button class="btn primary" id="revise-submit">重新生成</button></div>
+    </div>
+  </section>
+
+  <section class="card" id="email-card" hidden>
+    <div class="card-head">
+      <h2>② 确认发送邮件</h2>
+      <span class="tag">写操作</span>
+    </div>
+    <div class="grid2">
+      <label>收件人<input id="email-to" type="email" placeholder="name@example.com"></label>
+      <label>主题<input id="email-subject" type="text"></label>
+    </div>
+    <details class="preview"><summary>正文预览</summary><pre id="email-body"></pre></details>
+    <div class="actions">
+      <button class="btn primary" id="email-send">确认发送</button>
+      <button class="btn ghost" id="email-skip">跳过邮件</button>
+    </div>
+    <p class="hint">未配置 SMTP 时邮件写入 outbox/emails（dry-run），不会真实发送。</p>
+  </section>
+
+  <section class="card" id="notion-card" hidden>
+    <div class="card-head">
+      <h2>③ 确认保存到 Notion</h2>
+      <span class="tag">写操作</span>
+    </div>
+    <div class="grid2">
+      <label>标题<input id="notion-title" type="text"></label>
+      <label>标签（逗号分隔）<input id="notion-tags" type="text"></label>
+    </div>
+    <details class="preview"><summary>内容预览</summary><pre id="notion-content"></pre></details>
+    <div class="actions">
+      <button class="btn primary" id="notion-save">确认保存</button>
+      <button class="btn ghost" id="notion-skip">跳过 Notion</button>
+    </div>
+    <p class="hint">未配置 NOTION_TOKEN 时内容写入 outbox/notion（dry-run），不会真实同步。</p>
+  </section>
+
+  <section class="card" id="final-card" hidden>
+    <div class="card-head">
+      <h2>最终结果</h2>
+      <span class="pill" id="final-status" style="color:#17202a;background:#eef2f7;border-color:#e3e8ef"></span>
+    </div>
+    <dl class="meta" id="final-meta"></dl>
+    <div id="final-actions"></div>
+    <div id="final-errors"></div>
+    <details class="preview" id="final-evidence-wrap" hidden>
+      <summary>证据表（来源 / 摘要 / 可信度）</summary>
+      <div id="final-evidence"></div>
+    </details>
+    <div class="actions">
+      <button class="btn primary" id="download-report">下载 Markdown 报告</button>
+      <button class="btn ghost" id="restart-btn">开始新的研究</button>
+    </div>
+    <div class="draft" id="final-report"></div>
+    <details class="preview">
+      <summary>完整日志（按 step_id 串联）</summary>
+      <div class="log-wrap">
+        <table class="log-table">
+          <thead><tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr></thead>
+          <tbody id="final-log-body"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+</main>
+
+<footer>LangGraph + Function Calling 研究助手 MVP · 人工确认后才执行写操作</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  let threadId = null;
+  let busy = false;
+  let timer = null;
+  let latestLogs = [];
+  let currentInterrupt = null;
+  let currentFinal = null;
+
+  const STATUS_TEXT = {
+    completed: "完成",
+    completed_no_sources: "完成（无可靠来源）",
+    completed_with_action_failure: "完成（写操作失败）",
+    terminated_by_user: "已由用户终止",
+  };
+  const STATUS_CLASS = {
+    ok: "ok", degraded: "degraded", error: "error", rejected: "rejected",
+    skipped: "skipped", approved: "approved", revise: "approved", terminated: "error",
+  };
+
+  function escapeHtml(text) {
+    return String(text == null ? "" : text).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  function inline(text) {
+    let s = escapeHtml(text);
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    return s;
+  }
+
+  // 轻量 Markdown 渲染：标题 / 列表 / 表格 / 引用 / 加粗 / 链接，足够展示报告。
+  function renderMarkdown(markdown) {
+    const lines = String(markdown || "").split(/\r?\n/);
+    let html = "";
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^\s*```/.test(line)) {
+        const code = [];
+        i += 1;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { code.push(lines[i]); i += 1; }
+        i += 1;
+        html += '<pre class="code">' + escapeHtml(code.join("\n")) + "</pre>";
+        continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(line)) {
+        const rows = [];
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(lines[i]); i += 1; }
+        const cells = rows
+          .filter((row) => !/^\s*\|[\s:|\-]+\|\s*$/.test(row))
+          .map((row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim())));
+        if (cells.length) {
+          html += '<table class="md-table"><thead><tr>' + cells[0].map((c) => "<th>" + c + "</th>").join("") +
+            "</tr></thead><tbody>" + cells.slice(1).map((row) => "<tr>" + row.map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("") +
+            "</tbody></table>";
+        }
+        continue;
+      }
+      const heading = line.match(/^(#{1,4})\s+(.*)$/);
+      if (heading) {
+        const level = Math.min(heading[1].length + 1, 5);
+        html += "<h" + level + ">" + inline(heading[2]) + "</h" + level + ">";
+        i += 1;
+        continue;
+      }
+      const listMatch = line.match(/^\s*([-*]|\d+\.)\s+/);
+      if (listMatch) {
+        const ordered = /^\d+\.$/.test(listMatch[1]);
+        const items = [];
+        while (i < lines.length) {
+          const itemMatch = lines[i].match(/^\s*([-*]|\d+\.)\s+/);
+          if (!itemMatch) break;
+          if (/^\d+\.$/.test(itemMatch[1]) !== ordered) break;
+          items.push(lines[i].replace(/^\s*(?:[-*]|\d+\.)\s+/, ""));
+          i += 1;
+        }
+        const tag = ordered ? "ol" : "ul";
+        html += "<" + tag + ">" + items.map((item) => "<li>" + inline(item) + "</li>").join("") + "</" + tag + ">";
+        continue;
+      }
+      if (/^\s*>\s?/.test(line)) {
+        html += "<blockquote>" + inline(line.replace(/^\s*>\s?/, "")) + "</blockquote>";
+        i += 1;
+        continue;
+      }
+      if (!line.trim()) { i += 1; continue; }
+      const para = [];
+      while (i < lines.length && lines[i].trim() &&
+             !/^\s*(#{1,4}\s|[-*]\s|\d+\.\s|\||>|```)/.test(lines[i])) {
+        para.push(lines[i]);
+        i += 1;
+      }
+      // 兜底：任何未被上面分支消费的行都必须前进，避免死循环把页面卡死。
+      if (!para.length) {
+        para.push(line);
+        i += 1;
+      }
+      html += "<p>" + inline(para.join(" ")) + "</p>";
+    }
+    return html;
+  }
+
+  function statusChip(status) {
+    const cls = STATUS_CLASS[status] || "skipped";
+    return '<span class="state ' + cls + '">' + escapeHtml(status) + "</span>";
+  }
+
+  function renderLogs(tbodyId, logs) {
+    const tbody = $(tbodyId);
+    if (!tbody) return;
+    tbody.innerHTML = logs.map((entry) => {
+      const error = entry.error ? String(entry.error) : "";
+      const detail = [
+        entry.input_summary ? "输入：" + entry.input_summary : "",
+        entry.output_summary ? "输出：" + entry.output_summary : "",
+        error ? "错误：" + error : "",
+      ].filter(Boolean).join("\n");
+      return (
+        '<tr title="' + escapeHtml(detail) + '">' +
+        '<td class="mono">' + escapeHtml(entry.step_id) + "</td>" +
+        "<td>" + escapeHtml(entry.node_name) + "</td>" +
+        "<td>" + escapeHtml(entry.tool_name || "-") + "</td>" +
+        "<td>" + statusChip(entry.status) + "</td>" +
+        '<td class="mono">' + escapeHtml(entry.retry_count) + "</td>" +
+        '<td class="mono">' + escapeHtml(entry.latency_ms) + "ms</td>" +
+        '<td class="log-error" title="' + escapeHtml(error) + '">' + (error ? escapeHtml(error) : "-") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  function showError(message) {
+    const box = $("error");
+    box.textContent = message;
+    box.hidden = false;
+  }
+  function clearError() { $("error").hidden = true; }
+
+  function hidePanels() {
+    ["draft-card", "email-card", "notion-card", "final-card"].forEach((id) => { $(id).hidden = true; });
+  }
+
+  function setBusy(value, label) {
+    busy = value;
+    document.querySelectorAll("button").forEach((btn) => { btn.disabled = value; });
+    if (value) {
+      $("progress-card").hidden = false;
+      const started = Date.now();
+      $("progress-text").textContent = label || "处理中…";
+      clearInterval(timer);
+      timer = setInterval(() => {
+        const seconds = Math.round((Date.now() - started) / 1000);
+        if (latestLogs.length) {
+          const last = latestLogs[latestLogs.length - 1];
+          $("progress-text").textContent =
+            "已完成 " + latestLogs.length + " 步 · 最近：" + last.node_name +
+            "（" + last.status + "） · " + seconds + "s";
+        } else {
+          $("progress-text").textContent = (label || "处理中…") + " " + seconds + "s";
+        }
+      }, 500);
+    } else {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  async function api(path, body) {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await resp.json(); } catch (err) { data = {}; }
+    if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
+    return data;
+  }
+
+  // 实时接收后端推送的日志（NDJSON 流），最后一行是 result/error。
+  async function apiStream(path, body) {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try { const data = await resp.json(); detail = data.detail || ""; } catch (err) { detail = ""; }
+      throw new Error(detail || ("HTTP " + resp.status));
+    }
+    if (!resp.body) throw new Error("当前浏览器不支持流式响应");
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result = null;
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let index;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (!line) continue;
+        let event;
+        try { event = JSON.parse(line); } catch (err) { continue; }
+        if (event.type === "log" && event.entry) handleStreamLog(event.entry);
+        else if (event.type === "result") result = event.data;
+        else if (event.type === "error") throw new Error(event.message || "后端执行失败");
+      }
+    }
+    if (!result) throw new Error("连接中断：未收到结果，请查看后端终端日志");
+    return result;
+  }
+
+  function handleStreamLog(entry) {
+    if (!entry || !entry.step_id) return;
+    if (latestLogs.some((item) => item.step_id === entry.step_id)) return;
+    latestLogs.push(entry);
+    renderLogs("log-body", latestLogs);
+  }
+
+  function updateProgress(data) {
+    const logs = data.logs || [];
+    if (logs.length) {
+      const last = logs[logs.length - 1];
+      $("progress-text").textContent = "已完成 " + logs.length + " 步 · 最近：" + last.node_name + "（" + last.status + "）";
+    }
+  }
+
+  function render(data) {
+    latestLogs = data.logs || [];
+    threadId = data.thread_id || threadId;
+    renderLogs("log-body", latestLogs);
+    renderLogs("final-log-body", latestLogs);
+    hidePanels();
+    $("thread-pill").hidden = !threadId;
+    if (threadId) $("thread-pill").textContent = "会话 " + threadId;
+
+    if (data.status === "interrupt" && data.interrupt) {
+      currentInterrupt = data.interrupt;
+      if (data.interrupt.type === "draft_review") {
+        showDraft(data.interrupt);
+      } else if (data.interrupt.type === "email_confirmation") {
+        showEmail(data.interrupt);
+      } else if (data.interrupt.type === "notion_confirmation") {
+        showNotion(data.interrupt);
+      } else {
+        showError("未知的确认类型：" + data.interrupt.type);
+      }
+    } else {
+      currentInterrupt = null;
+      showFinal(data.final_output || {});
+    }
+    updateProgress(data);
+  }
+
+  function showDraft(payload) {
+    $("draft-meta").textContent = "来源 " + (payload.sources || []).length +
+      " · 证据 " + (payload.evidence_count || 0) +
+      " · 已修改 " + (payload.revision_count || 0) + " 轮";
+    $("draft-body").innerHTML = renderMarkdown(payload.draft_report || "");
+    $("revise-box").hidden = true;
+    $("revise-text").value = "";
+    $("draft-card").hidden = false;
+    $("draft-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showEmail(payload) {
+    const email = payload.email || {};
+    $("email-to").value = email.to || "";
+    $("email-subject").value = email.subject || "";
+    $("email-body").textContent = email.body || "";
+    $("email-card").hidden = false;
+    $("email-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showNotion(payload) {
+    const notion = payload.notion || {};
+    $("notion-title").value = notion.title || "";
+    $("notion-tags").value = (notion.tags || []).join(", ");
+    $("notion-content").textContent = notion.content || "";
+    $("notion-card").hidden = false;
+    $("notion-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showFinal(final) {
+    currentFinal = final;
+    $("final-status").textContent = STATUS_TEXT[final.status] || final.status || "完成";
+    const meta = [
+      ["状态", final.status || "-"],
+      ["来源数", String((final.sources || []).length)],
+      ["证据数", String(final.evidence_count || 0)],
+      ["子问题", String((final.sub_questions || []).length)],
+      ["耗时", String(final.duration_ms || 0) + " ms"],
+      ["token", String((final.token_usage || {}).total_tokens || 0)],
+      ["成本", "¥" + String(final.cost_cny == null ? 0 : final.cost_cny)],
+      ["trace_id", final.trace_id || "-"],
+      ["日志条数", String((final.log_summary || {}).total || latestLogs.length)],
+    ];
+    $("final-meta").innerHTML = meta.map(([k, v]) =>
+      "<div><dt>" + escapeHtml(k) + "</dt><dd class='mono'>" + escapeHtml(v) + "</dd></div>").join("");
+
+    const actions = final.actions || [];
+    if (!actions.length) {
+      $("final-actions").innerHTML = '<p class="muted">本次没有执行任何写操作（或被跳过）。</p>';
+    } else {
+      $("final-actions").innerHTML =
+        '<table class="md-table"><thead><tr><th>写操作</th><th>结果</th><th>模式</th><th>详情</th></tr></thead><tbody>' +
+        actions.map((action) => {
+          const detail = action.detail || {};
+          const note = detail.path || detail.url || detail.message_id || action.error || "";
+          return "<tr><td>" + escapeHtml(action.action) + "</td><td>" +
+            (action.ok ? "成功" : "失败") + "</td><td>" + escapeHtml(action.mode || "-") +
+            "</td><td class='mono'>" + escapeHtml(note) + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    const errors = final.errors || [];
+    $("final-errors").innerHTML = errors.length
+      ? '<ul class="err-list">' + errors.map((err) =>
+          "<li>[" + escapeHtml(err.node || "?") + "] " + escapeHtml(err.type || "error") +
+          ": " + escapeHtml(err.error || "") + "</li>").join("") + "</ul>"
+      : "";
+
+    const evidence = final.evidence || [];
+    const evidenceWrap = $("final-evidence-wrap");
+    evidenceWrap.hidden = evidence.length === 0;
+    $("final-evidence").innerHTML = evidence.length
+      ? '<table class="md-table"><thead><tr><th>编号</th><th>摘要</th><th>来源</th><th>可信度</th></tr></thead><tbody>' +
+        evidence.map((item, index) => {
+          const url = item.source_url || "";
+          const claim = item.claim || item.evidence_text || "";
+          return "<tr><td>S" + (index + 1) + "</td><td>" + escapeHtml(claim) +
+            '</td><td><a href="' + escapeHtml(url) + '" target="_blank" rel="noreferrer">' +
+            escapeHtml(url) + "</a></td><td>" + escapeHtml(String(item.confidence == null ? "-" : item.confidence)) +
+            "</td></tr>";
+        }).join("") + "</tbody></table>"
+      : "";
+
+    $("final-report").innerHTML = renderMarkdown(final.report || "");
+    $("final-card").hidden = false;
+    $("final-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function resetAll() {
+    threadId = null;
+    currentInterrupt = null;
+    currentFinal = null;
+    latestLogs = [];
+    clearError();
+    hidePanels();
+    $("progress-card").hidden = false;
+    $("log-body").innerHTML = "";
+    $("final-log-body").innerHTML = "";
+    $("thread-pill").hidden = true;
+    $("progress-text").textContent = "等待开始";
+    $("question").value = "";
+    $("revise-box").hidden = true;
+    demoStage = null;
+    demoRevision = 0;
+    demoEmailSent = false;
+    demoNotionSaved = false;
+  }
+
+  async function startResearch() {
+    if (busy) return;
+    clearError();
+    const question = $("question").value.trim();
+    if (!question) { showError("请先输入研究问题。"); return; }
+    if (demoMode) { startDemoResearch(question); return; }
+    threadId = null;
+    latestLogs = [];
+    $("log-body").innerHTML = "";
+    $("final-log-body").innerHTML = "";
+    hidePanels();
+    setBusy(true, "正在检索、抓取并总结证据…");
+    try {
+      const data = await apiStream("/api/research/stream", { question });
+      render(data);
+    } catch (err) {
+      showError(err.message || String(err));
+      $("progress-text").textContent = "失败";
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resume(value) {
+    if (busy || !threadId) return;
+    if (demoMode) { demoResume(value); return; }
+    clearError();
+    if (currentInterrupt && currentInterrupt.type === "email_confirmation") {
+      setBusy(true, "正在发送邮件…");
+    } else if (currentInterrupt && currentInterrupt.type === "notion_confirmation") {
+      setBusy(true, "正在保存到 Notion…");
+    } else {
+      setBusy(true, "正在重新生成草稿…");
+    }
+    try {
+      const data = await apiStream("/api/resume/stream", { thread_id: threadId, value });
+      render(data);
+    } catch (err) {
+      showError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---------- 静态演示模式（直接双击打开 index.html 时使用示例数据）----------
+  let demoMode = false;
+  let demoStage = null;
+  let demoQuestion = "";
+  let demoDraft = "";
+  let demoRevision = 0;
+  let demoEmailSent = false;
+  let demoNotionSaved = false;
+
+  const DEMO_STEPS = [
+    ["receive_question", "-", "ok"],
+    ["plan_research", "-", "ok"],
+    ["search_web", "search_web", "ok"],
+    ["fetch_pages", "fetch_page", "ok"],
+    ["fetch_pages", "fetch_page", "ok"],
+    ["summarize_sources", "summarize_sources", "ok"],
+    ["draft_report", "-", "degraded"],
+  ];
+
+  function enableDemoMode() {
+    demoMode = true;
+    $("mode-pill").textContent = "静态演示模式";
+    $("demo-banner").hidden = false;
+  }
+
+  function demoLog(node, status) {
+    latestLogs.push({
+      step_id: "S" + String(latestLogs.length + 1).padStart(3, "0"),
+      node_name: node,
+      tool_name: "-",
+      status: status || "ok",
+      retry_count: 0,
+      latency_ms: 0,
+      input_summary: "",
+      output_summary: "",
+      error: null,
+      timestamp: "",
+    });
+    renderLogs("log-body", latestLogs);
+    $("progress-text").textContent = "演示进度：" + latestLogs.length + " 步";
+  }
+
+  function demoDraftMarkdown() {
+    return [
+      "# 研究报告：" + demoQuestion,
+      "",
+      "> ⚠️ 静态演示模式：以下内容为**示例数据**，页面没有连接后端，未进行真实检索。",
+      "",
+      "## 摘要",
+      "",
+      "静态演示模式下，LangGraph 通过 interrupt 暂停图，并通过 Command(resume=...) 恢复执行[S1]；" +
+        "写操作必须经过人工确认后才会执行[S2]。",
+      "本页没有连接后端，以上内容均为示例数据，真实研究请运行 `python web.py`。",
+      "",
+      "## 关键发现",
+      "",
+      "- LangGraph 用 interrupt 暂停图，再通过 Command(resume=...) 恢复执行 [S1]",
+      "- 发邮件 / 存 Notion 等写操作必须人工确认后才执行 [S2]",
+      "",
+      "## 局限与未证实",
+      "",
+      "- 当前资料未覆盖真实检索结果：本页为静态演示，示例 URL 不可回溯到真实抓取结果。",
+      "- 演示数据不包含真实网页正文，不应作为研究结论使用。",
+      "",
+      "## 来源清单",
+      "",
+      "- [示例来源 A](https://example.org/demo-a)（[S1]）",
+      "- [示例来源 B](https://example.org/demo-b)（[S2]）",
+    ].join("\n");
+  }
+
+  function demoPayloadDraft() {
+    return {
+      type: "draft_review",
+      research_question: demoQuestion,
+      draft_report: demoDraft,
+      sources: [
+        { url: "https://example.org/demo-a", title: "示例来源 A" },
+        { url: "https://example.org/demo-b", title: "示例来源 B" },
+      ],
+      evidence_count: 2,
+      revision_count: demoRevision,
+    };
+  }
+
+  function startDemoResearch(question) {
+    demoQuestion = question;
+    demoStage = "draft";
+    demoRevision = 0;
+    demoEmailSent = false;
+    demoNotionSaved = false;
+    threadId = "demo-session";
+    latestLogs = [];
+    currentInterrupt = null;
+    currentFinal = null;
+    $("log-body").innerHTML = "";
+    hidePanels();
+    $("progress-card").hidden = false;
+    setBusy(true, "演示：正在生成示例流程…");
+    let index = 0;
+    const demoTimer = setInterval(() => {
+      if (index >= DEMO_STEPS.length) {
+        clearInterval(demoTimer);
+        setBusy(false);
+        demoDraft = demoDraftMarkdown();
+        render({
+          thread_id: threadId,
+          status: "interrupt",
+          interrupt: demoPayloadDraft(),
+          logs: latestLogs,
+        });
+        return;
+      }
+      const step = DEMO_STEPS[index];
+      index += 1;
+      demoLog(step[0], step[2]);
+    }, 300);
+  }
+
+  function demoResume(value) {
+    const decision = value || {};
+    if (currentInterrupt && currentInterrupt.type === "draft_review") {
+      if (decision.decision === "terminate") {
+        demoFinal("terminated_by_user");
+        return;
+      }
+      if (decision.decision === "revise") {
+        demoRevision += 1;
+        demoDraft = demoDraftMarkdown() +
+          "\n\n> 已按修改意见重新生成（演示）：" + (decision.comment || "");
+        demoLog("draft_report", "ok");
+        render({ thread_id: threadId, status: "interrupt", interrupt: demoPayloadDraft(), logs: latestLogs });
+        return;
+      }
+      demoLog("human_review_draft", "approved");
+      demoStage = "email";
+      render({
+        thread_id: threadId,
+        status: "interrupt",
+        interrupt: {
+          type: "email_confirmation",
+          email: { to: "demo@example.com", subject: "研究报告（演示）", body: demoDraft },
+        },
+        logs: latestLogs,
+      });
+      return;
+    }
+
+    if (currentInterrupt && currentInterrupt.type === "email_confirmation") {
+      demoEmailSent = Boolean(decision.send);
+      demoLog("human_confirm_actions", demoEmailSent ? "approved" : "skipped");
+      demoStage = "notion";
+      render({
+        thread_id: threadId,
+        status: "interrupt",
+        interrupt: {
+          type: "notion_confirmation",
+          notion: { title: "研究报告（演示）", content: demoDraft, tags: ["research", "demo"] },
+        },
+        logs: latestLogs,
+      });
+      return;
+    }
+
+    if (currentInterrupt && currentInterrupt.type === "notion_confirmation") {
+      demoNotionSaved = Boolean(decision.save);
+      demoLog("human_confirm_actions", demoNotionSaved ? "approved" : "skipped");
+      demoFinal("completed");
+    }
+  }
+
+  function demoFinal(status) {
+    demoLog("finalize", "ok");
+    const actions = [];
+    if (demoEmailSent) {
+      actions.push({
+        action: "send_email", ok: true, mode: "dry_run",
+        detail: { path: "outbox/emails/demo.eml" }, error: null,
+      });
+    }
+    if (demoNotionSaved) {
+      actions.push({
+        action: "save_to_notion", ok: true, mode: "dry_run",
+        detail: { path: "outbox/notion/demo.md" }, error: null,
+      });
+    }
+    const final = {
+      research_question: demoQuestion,
+      status: status,
+      report: demoDraft,
+      sources: [
+        { url: "https://example.org/demo-a", title: "示例来源 A" },
+        { url: "https://example.org/demo-b", title: "示例来源 B" },
+      ],
+      evidence_count: 2,
+      evidence: [
+        {
+          claim: "LangGraph 用 interrupt 暂停图，再通过 Command(resume=...) 恢复执行。",
+          source_url: "https://example.org/demo-a",
+          source_snippet: "示例来源 A",
+          confidence: 0.8,
+        },
+        {
+          claim: "发邮件 / 存 Notion 等写操作必须人工确认后才执行。",
+          source_url: "https://example.org/demo-b",
+          source_snippet: "示例来源 B",
+          confidence: 0.72,
+        },
+      ],
+      sub_questions: [
+        "LangGraph 的人工中断机制是什么",
+        "interrupt 如何暂停与恢复",
+        "写操作为何需要人工确认",
+      ],
+      evidence_note: "静态演示：示例数据，未进行真实检索",
+      token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, calls: 0 },
+      cost_cny: 0,
+      duration_ms: 0,
+      actions: actions,
+      errors: [],
+      llm_mode: "demo",
+      trace_id: "demo-0000",
+      log_summary: { total: latestLogs.length },
+    };
+    demoStage = "final";
+    render({ thread_id: threadId, status: "completed", final_output: final, logs: latestLogs });
+  }
+
+  // ---------- 事件绑定 ----------
+  $("start-btn").addEventListener("click", startResearch);
+  $("question").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") startResearch();
+  });
+
+  $("draft-approve").addEventListener("click", () =>
+    resume({ decision: "approve", comment: "" }));
+  $("draft-terminate").addEventListener("click", () =>
+    resume({ decision: "terminate", comment: "前端用户主动终止" }));
+  $("draft-revise-toggle").addEventListener("click", () => {
+    $("revise-box").hidden = !$("revise-box").hidden;
+    if (!$("revise-box").hidden) $("revise-text").focus();
+  });
+  $("revise-submit").addEventListener("click", () => {
+    const comment = $("revise-text").value.trim();
+    if (!comment) { showError("请填写修改意见。"); return; }
+    resume({ decision: "revise", comment });
+  });
+
+  $("email-send").addEventListener("click", () => {
+    if (!currentInterrupt || currentInterrupt.type !== "email_confirmation") return;
+    const to = $("email-to").value.trim();
+    if (!to) { showError("收件人不能为空。"); return; }
+    resume({
+      send: true,
+      email_payload: {
+        to,
+        subject: $("email-subject").value.trim(),
+        body: (currentInterrupt.email || {}).body || "",
+      },
+    });
+  });
+  $("email-skip").addEventListener("click", () => resume({ send: false }));
+
+  $("notion-save").addEventListener("click", () => {
+    if (!currentInterrupt || currentInterrupt.type !== "notion_confirmation") return;
+    const title = $("notion-title").value.trim();
+    if (!title) { showError("Notion 标题不能为空。"); return; }
+    const tags = $("notion-tags").value.split(",").map((t) => t.trim()).filter(Boolean);
+    resume({
+      save: true,
+      notion_payload: {
+        title,
+        tags,
+        content: (currentInterrupt.notion || {}).content || "",
+      },
+    });
+  });
+  $("notion-skip").addEventListener("click", () => resume({ save: false }));
+
+  $("download-report").addEventListener("click", () => {
+    if (!currentFinal) return;
+    const blob = new Blob([currentFinal.report || ""], { type: "text/markdown;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "research-" + (currentFinal.trace_id || "report") + ".md";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
+  $("restart-btn").addEventListener("click", () => {
+    resetAll();
+    $("question").focus();
+  });
+
+  // 页面加载时显示 LLM 模式；file:// 或后端不可用时自动进入静态演示模式
+  // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始
+  const urlParams = new URLSearchParams(location.search);
+  const prefillQuestion = urlParams.get("q");
+  if (prefillQuestion) $("question").value = prefillQuestion;
+  const autoStart = urlParams.get("autostart") === "1";
+
+  function maybeAutostart() {
+    if (!autoStart) return;
+    const question = $("question").value.trim();
+    if (!question) return;
+    if (demoMode) startDemoResearch(question);
+    else startResearch();
+  }
+
+  fetch("/api/health")
+    .then((resp) => {
+      if (!resp.ok) throw new Error("health " + resp.status);
+      return resp.json();
+    })
+    .then((data) => {
+      $("mode-pill").textContent = data.llm_mode === "openai" ? "OpenAI 模式" : "离线启发式模式";
+      maybeAutostart();
+    })
+    .catch(() => {
+      enableDemoMode();
+      maybeAutostart();
+    });
+})();
+</script>
+</body>
+</html>
