@@ -148,6 +148,338 @@
     .grid2 { grid-template-columns: 1fr; }
   }
 </style>
+<style id="theme-dark">
+  :root {
+    --bg: #05070d;
+    --bg-2: #0a1120;
+    --card: rgba(15, 23, 42, .72);
+    --card-2: rgba(10, 17, 32, .86);
+    --ink: #e6edf7;
+    --muted: #8fa3bf;
+    --line: rgba(148, 163, 184, .16);
+    --line-strong: rgba(148, 163, 184, .28);
+    --accent: #22d3ee;
+    --accent-2: #8b5cf6;
+    --accent-soft: rgba(34, 211, 238, .12);
+    --green: #34d399;
+    --amber: #fbbf24;
+    --red: #fb7185;
+    --gray: #64748b;
+    --glow: 0 0 0 1px rgba(34, 211, 238, .22), 0 18px 50px rgba(0, 0, 0, .45);
+  }
+  [hidden] { display: none !important; }
+  html { scroll-behavior: smooth; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(900px 520px at 12% -10%, rgba(34, 211, 238, .16), transparent 62%),
+      radial-gradient(820px 520px at 92% 4%, rgba(139, 92, 246, .16), transparent 60%),
+      radial-gradient(700px 500px at 50% 110%, rgba(14, 165, 233, .08), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font: 15px/1.7 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(148, 163, 184, .045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, .045) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,.9), transparent 78%);
+  }
+  .wrap { max-width: 1120px; padding: 0 24px; }
+  header.top {
+    background: linear-gradient(180deg, rgba(5, 7, 13, .86), rgba(5, 7, 13, .55));
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(18px);
+    padding: 20px 0;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .top-inner { gap: 18px; }
+  .brand { gap: 13px; min-width: 0; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 14px;
+    background: linear-gradient(135deg, rgba(34, 211, 238, .98), rgba(139, 92, 246, .98));
+    color: #06111f;
+    font-size: 21px; font-weight: 800;
+    box-shadow: 0 8px 26px rgba(34, 211, 238, .22);
+    flex: 0 0 auto;
+  }
+  h1 { font-size: 18px; letter-spacing: .2px; font-weight: 700; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  .top-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: rgba(148, 163, 184, .08);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .mode-pill::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--gray); box-shadow: 0 0 0 4px rgba(148, 163, 184, .08);
+  }
+  .mode-pill.online { color: var(--green); border-color: rgba(52, 211, 153, .28); }
+  .mode-pill.online::before { background: var(--green); box-shadow: 0 0 0 4px rgba(52, 211, 153, .12); animation: pulse 2.4s infinite; }
+  .mode-pill.offline { color: var(--amber); border-color: rgba(251, 191, 36, .25); }
+  .mode-pill.offline::before { background: var(--amber); }
+  .mode-pill.demo { color: var(--accent); border-color: rgba(34, 211, 238, .25); }
+  .settings-btn { padding: 8px 13px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
+  .gear { font-size: 14px; opacity: .85; }
+  main { padding: 26px 0 48px; gap: 18px; }
+  .hero {
+    padding: 22px 4px 8px;
+    animation: rise .5s ease both;
+  }
+  .eyebrow {
+    margin: 0 0 10px;
+    font-size: 11px; letter-spacing: .22em; font-weight: 700;
+    color: var(--accent); text-transform: uppercase;
+  }
+  .hero h2 {
+    margin: 0 0 12px;
+    font-size: clamp(27px, 4vw, 42px);
+    line-height: 1.24;
+    letter-spacing: -.04em;
+    font-weight: 800;
+    color: #f2f7ff;
+  }
+  .hero h2 span {
+    background: linear-gradient(90deg, var(--accent), #a78bfa 60%, #f0abfc);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .hero-copy { max-width: 720px; margin: 0 0 18px; color: var(--muted); font-size: 14.5px; }
+  .hero-stats { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; font-size: 12.5px; color: var(--muted); }
+  .hero-stats span { display: inline-flex; align-items: center; gap: 6px; }
+  .hero-stats strong { color: var(--ink); font-size: 15px; }
+  .hero-status {
+    margin-left: auto;
+    color: var(--accent);
+    border: 1px solid rgba(34, 211, 238, .22);
+    background: rgba(34, 211, 238, .06);
+    border-radius: 999px;
+    padding: 4px 11px;
+    font-size: 11.5px;
+  }
+  .card {
+    position: relative;
+    background: linear-gradient(180deg, rgba(17, 27, 48, .82), rgba(9, 15, 28, .76));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 22px 24px;
+    box-shadow: 0 22px 55px rgba(0, 0, 0, .38);
+    backdrop-filter: blur(14px);
+    animation: rise .55s ease both;
+  }
+  .card::before {
+    content: "";
+    position: absolute; inset: 0 0 auto; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(34, 211, 238, .38), rgba(139, 92, 246, .28), transparent);
+    opacity: .7;
+  }
+  .card-head { margin-bottom: 14px; }
+  .card-head h2 { font-size: 16.5px; letter-spacing: -.01em; }
+  .label { font-size: 13px; color: #c8d5e8; font-weight: 650; }
+  .muted { color: var(--muted); }
+  textarea, input {
+    background: rgba(5, 10, 20, .62);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    color: var(--ink);
+    padding: 11px 13px;
+    caret-color: var(--accent);
+    transition: border-color .18s, box-shadow .18s, background .18s;
+  }
+  textarea::placeholder, input::placeholder { color: #5f728d; }
+  textarea:focus, input:focus {
+    border-color: rgba(34, 211, 238, .65);
+    background: rgba(5, 10, 20, .86);
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, .12);
+  }
+  .ask-row textarea { min-height: 64px; border-radius: 12px; }
+  .btn {
+    border-radius: 11px;
+    padding: 10px 17px;
+    font-size: 14px;
+    transition: transform .12s, filter .15s, background .15s, border-color .15s;
+  }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn.primary {
+    background: linear-gradient(135deg, #06b6d4, #2563eb 55%, #7c3aed);
+    color: #fff;
+    border-color: rgba(34, 211, 238, .35);
+    box-shadow: 0 10px 28px rgba(37, 99, 235, .28);
+  }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.1); box-shadow: 0 12px 34px rgba(34, 211, 238, .24); }
+  .btn.ghost {
+    background: rgba(148, 163, 184, .07);
+    color: #cfe0f5;
+    border-color: var(--line-strong);
+  }
+  .btn.ghost:hover:not(:disabled) { background: rgba(148, 163, 184, .13); border-color: rgba(34, 211, 238, .35); }
+  .btn.danger {
+    background: rgba(251, 113, 133, .06);
+    color: #fda4af;
+    border-color: rgba(251, 113, 133, .28);
+  }
+  .hint { color: #7f93ae; font-size: 12.5px; }
+  .tag {
+    color: var(--amber);
+    background: rgba(251, 191, 36, .08);
+    border: 1px solid rgba(251, 191, 36, .25);
+  }
+  .banner {
+    background: rgba(251, 191, 36, .07);
+    border: 1px solid rgba(251, 191, 36, .24);
+    color: #fcd34d;
+    border-radius: 13px;
+  }
+  .banner code { background: rgba(251, 191, 36, .12); color: #fde68a; }
+  .alert {
+    background: rgba(251, 113, 133, .08);
+    border: 1px solid rgba(251, 113, 133, .3);
+    color: #fecdd3;
+    border-radius: 13px;
+  }
+  .draft { max-height: 500px; padding-right: 8px; }
+  .draft h2 { color: #f2f7ff; font-size: 19px; }
+  .draft h3 { color: #dbeafe; }
+  .draft h4, .draft h5 { color: #bfdbfe; }
+  .draft a { color: #67e8f9; }
+  .draft blockquote {
+    border-left: 3px solid rgba(34, 211, 238, .5);
+    background: rgba(34, 211, 238, .04);
+    color: #a9bdd6;
+    border-radius: 0 8px 8px 0;
+  }
+  .md-table { font-size: 12.8px; }
+  .md-table th, .md-table td { border-color: var(--line); }
+  .md-table th { background: rgba(148, 163, 184, .08); color: #cbd8ea; }
+  .md-table tr:nth-child(even) td { background: rgba(148, 163, 184, .025); }
+  pre {
+    background: rgba(2, 6, 14, .72);
+    border: 1px solid var(--line);
+    color: #c8d5e8;
+    border-radius: 11px;
+  }
+  .preview summary { color: #8fa3bf; }
+  .preview summary:hover { color: var(--accent); }
+  .log-wrap { border-color: var(--line); border-radius: 12px; background: rgba(2, 6, 14, .45); }
+  .log-table { font-size: 12.3px; }
+  .log-table th {
+    background: rgba(11, 19, 35, .96);
+    color: #9fb4cf;
+    border-bottom: 1px solid var(--line);
+  }
+  .log-table td { border-bottom: 1px solid rgba(148, 163, 184, .08); color: #c3d2e5; }
+  .log-table tr:hover td { background: rgba(34, 211, 238, .035); }
+  .log-error { color: #fda4af; }
+  .state.ok { color: var(--green); background: rgba(52, 211, 153, .08); border-color: rgba(52, 211, 153, .24); }
+  .state.degraded { color: var(--amber); background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .24); }
+  .state.error, .state.rejected { color: var(--red); background: rgba(251, 113, 133, .08); border-color: rgba(251, 113, 133, .24); }
+  .state.skipped { color: #94a3b8; background: rgba(148, 163, 184, .08); border-color: var(--line); }
+  .state.approved { color: var(--accent); background: rgba(34, 211, 238, .08); border-color: rgba(34, 211, 238, .24); }
+  .meta div {
+    background: rgba(2, 6, 14, .42);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+  }
+  .meta dt { color: #7f93ae; }
+  .meta dd { color: #e2ebf8; }
+  .err-list { color: #fecdd3; }
+  footer { color: #5f728d; padding-bottom: 34px; }
+  .key-row { display: flex; gap: 8px; align-items: center; }
+  .key-row input { flex: 1 1 auto; }
+  .key-row .btn { padding: 9px 12px; flex: 0 0 auto; }
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(2, 6, 14, .72);
+    backdrop-filter: blur(8px);
+    display: grid; place-items: center;
+    padding: 18px;
+  }
+  .modal {
+    width: min(560px, 100%);
+    max-height: min(86vh, 760px);
+    overflow: auto;
+    background: linear-gradient(180deg, rgba(17, 27, 48, .98), rgba(9, 15, 28, .98));
+    border: 1px solid rgba(34, 211, 238, .18);
+    border-radius: 18px;
+    padding: 22px;
+    box-shadow: var(--glow), 0 30px 90px rgba(0, 0, 0, .55);
+    animation: pop .22s ease both;
+  }
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .modal-head h2 { margin: 2px 0 0; font-size: 19px; }
+  .modal-head .eyebrow { margin: 0; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--line); background: rgba(148, 163, 184, .06);
+    color: var(--muted); font-size: 18px; line-height: 1;
+  }
+  .icon-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+  .settings-note {
+    margin: 0 0 16px; padding: 10px 12px;
+    border: 1px solid rgba(34, 211, 238, .16);
+    background: rgba(34, 211, 238, .05);
+    border-radius: 10px;
+    color: #9fb4cf; font-size: 12.5px;
+  }
+  .settings-note strong { color: #c8f7ff; font-weight: 600; }
+  .field { margin: 0 0 13px; }
+  .field > label { display: block; margin-bottom: 6px; font-size: 12.5px; font-weight: 650; color: #c8d5e8; }
+  .preset-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 14px; }
+  .preset {
+    cursor: pointer; font: inherit; font-size: 12px;
+    color: #a9bdd6; background: rgba(148, 163, 184, .06);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px;
+  }
+  .preset:hover { color: #e6edf7; border-color: rgba(34, 211, 238, .35); }
+  .preset.active {
+    color: #06111f; background: linear-gradient(135deg, var(--accent), #818cf8);
+    border-color: transparent; font-weight: 700;
+  }
+  .config-msg { margin: 4px 0 12px; padding: 9px 11px; border-radius: 9px; font-size: 12.5px; }
+  .config-msg.ok { color: #a7f3d0; background: rgba(52, 211, 153, .08); border: 1px solid rgba(52, 211, 153, .25); }
+  .config-msg.err { color: #fecdd3; background: rgba(251, 113, 133, .08); border: 1px solid rgba(251, 113, 133, .25); }
+  .config-msg.busy { color: #a5f3fc; background: rgba(34, 211, 238, .06); border: 1px solid rgba(34, 211, 238, .2); }
+  .modal-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+  .modal-actions .btn { flex: 1 1 auto; }
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    z-index: 80; max-width: min(92vw, 520px);
+    padding: 10px 16px; border-radius: 12px;
+    background: rgba(15, 23, 42, .95); color: #d1fae5;
+    border: 1px solid rgba(52, 211, 153, .3);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, .45);
+    font-size: 13px;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+  @media (max-width: 760px) {
+    .wrap { padding: 0 16px; }
+    header.top { position: static; padding: 16px 0; }
+    .top-inner { align-items: flex-start; }
+    .top-actions { width: 100%; justify-content: flex-start; }
+    .hero { padding-top: 14px; }
+    .hero-status { margin-left: 0; }
+    .ask-row { flex-direction: column; }
+    .card { padding: 18px 16px; border-radius: 15px; }
+    .modal { padding: 18px 16px; }
+    .modal-actions .btn { flex: 1 1 100%; }
+  }
+</style>
 </head>
 <body>
 
@@ -160,17 +492,32 @@
         <p class="sub">检索 → 抓取 → 证据 → 报告草稿 → 人工确认 → 邮件 / Notion</p>
       </div>
     </div>
-    <div class="pills">
-      <span class="pill" id="mode-pill">模式检测中</span>
+    <div class="top-actions">
+      <span class="pill mode-pill" id="mode-pill">模式检测中</span>
       <span class="pill" id="thread-pill" hidden></span>
+      <button class="btn ghost settings-btn" id="settings-btn" type="button">
+        <span class="gear" aria-hidden="true">⚙</span> 模型设置
+      </button>
     </div>
   </div>
 </header>
 
 <main class="wrap">
+  <section class="hero">
+    <p class="eyebrow">RESEARCH AGENT · HUMAN IN THE LOOP</p>
+    <h2>把一个问题，变成一份<br><span>带来源、可复核</span>的研究报告</h2>
+    <p class="hero-copy">先拆解、再检索、再抓取；证据不足会补检，结论必须能回到原文。邮件与 Notion 只在你逐项确认后写入。</p>
+    <div class="hero-stats">
+      <span><strong>3</strong> 次人工确认</span>
+      <span><strong>5</strong> 个固定工具</span>
+      <span><strong>0</strong> 编造来源</span>
+      <span class="hero-status" id="hero-status">等待配置</span>
+    </div>
+  </section>
+
   <div id="demo-banner" class="banner" hidden>
     当前为 <strong>静态演示模式</strong>：页面数据是示例，未连接后端。
-    运行 <code>python web.py</code> 后访问 <code>http://127.0.0.1:8000</code> 可跑真实研究流程。
+    运行 <code>python web.py</code> 后访问 <code>http://127.0.0.1:8000</code> 可跑真实研究流程，并在右上角「模型设置」里填写 API Key。
   </div>
 
   <section class="card">
@@ -253,7 +600,7 @@
   <section class="card" id="final-card" hidden>
     <div class="card-head">
       <h2>最终结果</h2>
-      <span class="pill" id="final-status" style="color:#17202a;background:#eef2f7;border-color:#e3e8ef"></span>
+      <span class="pill" id="final-status"></span>
     </div>
     <dl class="meta" id="final-meta"></dl>
     <div id="final-actions"></div>
@@ -278,6 +625,68 @@
     </details>
   </section>
 </main>
+
+<div class="modal-backdrop" id="settings-modal" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <div>
+        <p class="eyebrow">CONFIGURATION</p>
+        <h2 id="settings-title">模型设置</h2>
+      </div>
+      <button class="icon-btn" id="settings-close" type="button" aria-label="关闭设置">×</button>
+    </div>
+    <p class="settings-note">
+      API Key 只保存在<strong>后端进程内存</strong>，不写入 <code>.env</code>、不会回传明文；
+      重启 <code>web.py</code> 后需要重新填写。页面不会把 Key 存进浏览器存储。
+    </p>
+
+    <div class="preset-row" id="preset-row" aria-label="提供方预设">
+      <button class="preset active" type="button" data-provider="deepseek"
+        data-base="https://api.deepseek.com/v1" data-model="deepseek-chat">DeepSeek</button>
+      <button class="preset" type="button" data-provider="openai"
+        data-base="https://api.openai.com/v1" data-model="gpt-4o-mini">OpenAI</button>
+      <button class="preset" type="button" data-provider="qwen"
+        data-base="https://dashscope.aliyuncs.com/compatible-mode/v1" data-model="qwen-plus">通义千问</button>
+      <button class="preset" type="button" data-provider="zhipu"
+        data-base="https://open.bigmodel.cn/api/paas/v4" data-model="glm-4-flash">智谱 GLM</button>
+      <button class="preset" type="button" data-provider="ollama"
+        data-base="http://127.0.0.1:11434/v1" data-model="qwen2.5:7b">本地 Ollama</button>
+      <button class="preset" type="button" data-provider="custom"
+        data-base="" data-model="">自定义</button>
+    </div>
+
+    <div class="field">
+      <label for="api-key">API Key</label>
+      <div class="key-row">
+        <input id="api-key" type="password" autocomplete="new-password" spellcheck="false"
+          placeholder="sk-...（留空则沿用已保存配置）">
+        <button class="btn ghost" id="toggle-key" type="button">显示</button>
+      </div>
+      <p class="hint" id="key-status">正在读取配置…</p>
+    </div>
+
+    <div class="field">
+      <label for="base-url">Base URL</label>
+      <input id="base-url" type="text" autocomplete="off" spellcheck="false"
+        placeholder="https://api.deepseek.com/v1">
+    </div>
+    <div class="field">
+      <label for="model-name">模型名</label>
+      <input id="model-name" type="text" autocomplete="off" spellcheck="false"
+        placeholder="deepseek-chat">
+    </div>
+
+    <div id="config-msg" class="config-msg" hidden></div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" id="test-connection" type="button">测试连接</button>
+      <button class="btn primary" id="save-config" type="button">保存并使用</button>
+      <button class="btn danger" id="clear-config" type="button">清除运行时配置</button>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" hidden></div>
 
 <footer>LangGraph + Function Calling 研究助手 MVP · 人工确认后才执行写操作</footer>
 
@@ -548,9 +957,14 @@
   }
 
   function showDraft(payload) {
-    $("draft-meta").textContent = "来源 " + (payload.sources || []).length +
-      " · 证据 " + (payload.evidence_count || 0) +
-      " · 已修改 " + (payload.revision_count || 0) + " 轮";
+    const cov = payload.coverage_summary || {};
+    const ver = payload.verification || {};
+    let meta = "来源 " + (payload.sources || []).length +
+      " · 证据 " + (payload.evidence_count || 0);
+    if (cov.total) meta += " · 覆盖 " + (cov.covered || 0) + "/" + cov.total;
+    if (ver.total) meta += " · 证据支持率 " + Math.round((ver.support_rate || 0) * 100) + "%";
+    meta += " · 已修改 " + (payload.revision_count || 0) + " 轮";
+    $("draft-meta").textContent = meta;
     $("draft-body").innerHTML = renderMarkdown(payload.draft_report || "");
     $("revise-box").hidden = true;
     $("revise-text").value = "";
@@ -584,6 +998,13 @@
       ["来源数", String((final.sources || []).length)],
       ["证据数", String(final.evidence_count || 0)],
       ["子问题", String((final.sub_questions || []).length)],
+      ["覆盖", (final.coverage_summary || {}).total
+        ? String((final.coverage_summary || {}).covered || 0) + "/" + String((final.coverage_summary || {}).total)
+        : "-"],
+      ["支持率", (final.verification || {}).total
+        ? Math.round(((final.verification || {}).support_rate || 0) * 100) + "%"
+        : "-"],
+      ["检索轮次", String(final.retrieval_rounds || 1)],
       ["耗时", String(final.duration_ms || 0) + " ms"],
       ["token", String((final.token_usage || {}).total_tokens || 0)],
       ["成本", "¥" + String(final.cost_cny == null ? 0 : final.cost_cny)],
@@ -720,7 +1141,7 @@
 
   function enableDemoMode() {
     demoMode = true;
-    $("mode-pill").textContent = "静态演示模式";
+    setModePill({});
     $("demo-banner").hidden = false;
   }
 
@@ -927,6 +1348,242 @@
     render({ thread_id: threadId, status: "completed", final_output: final, logs: latestLogs });
   }
 
+  // ---------- 模型设置：Key 只提交到后端内存，不写入浏览器存储 ----------
+  let configState = {
+    configured: false, mode: "offline", model: "", base_url: "", masked_key: "", source: "none",
+  };
+  let configBusy = false;
+  let toastTimer = null;
+
+  function setModePill(data) {
+    const pill = $("mode-pill");
+    const hero = $("hero-status");
+    pill.classList.remove("online", "offline", "demo");
+    if (demoMode) {
+      pill.textContent = "静态演示模式";
+      pill.classList.add("demo");
+      if (hero) hero.textContent = "未连接后端 · 示例数据";
+      return;
+    }
+    const online = (data.llm_mode || data.mode) === "openai";
+    pill.textContent = online ? "在线 · " + (data.model || "LLM") : "离线启发式";
+    pill.classList.add(online ? "online" : "offline");
+    if (hero) {
+      hero.textContent = online
+        ? "LLM 在线 · " + (data.model || "已配置")
+        : "离线模式 · 右上角可配置 Key";
+    }
+  }
+
+  async function fetchJson(path, options) {
+    const resp = await fetch(path, options || {});
+    let data = {};
+    try { data = await resp.json(); } catch (err) { data = {}; }
+    if (!resp.ok) throw new Error((data && data.detail) || ("HTTP " + resp.status));
+    return data;
+  }
+
+  function showToast(text) {
+    const toast = $("toast");
+    if (!toast) return;
+    toast.textContent = text;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, 2800);
+  }
+
+  function setConfigMsg(text, kind) {
+    const box = $("config-msg");
+    if (!text) {
+      box.hidden = true;
+      box.textContent = "";
+      box.className = "config-msg";
+      return;
+    }
+    box.hidden = false;
+    box.textContent = text;
+    box.className = "config-msg " + (kind || "busy");
+  }
+
+  function markPreset() {
+    const base = $("base-url").value.trim().replace(/\/+$/, "");
+    const model = $("model-name").value.trim();
+    let matched = false;
+    document.querySelectorAll("#preset-row .preset").forEach((btn) => {
+      const same = btn.dataset.base && btn.dataset.base.replace(/\/+$/, "") === base &&
+        btn.dataset.model === model;
+      btn.classList.toggle("active", Boolean(same));
+      if (same) matched = true;
+    });
+    if (!matched) {
+      const custom = document.querySelector('#preset-row [data-provider="custom"]');
+      if (custom) custom.classList.add("active");
+    }
+  }
+
+  function applyConfigToForm(data) {
+    configState = Object.assign({}, configState, data || {});
+    $("base-url").value = data.base_url || "";
+    $("model-name").value = data.model || "";
+    $("api-key").value = "";
+    if (data.configured) {
+      $("api-key").placeholder = "已保存 " + data.masked_key + "，留空沿用";
+      $("key-status").textContent = "当前：" + data.masked_key + " · " +
+        (data.source === "runtime" ? "仅本次运行" : "来自 .env");
+    } else {
+      $("api-key").placeholder = "sk-...（留空则沿用已保存配置）";
+      $("key-status").textContent = "未配置 Key，当前使用离线启发式模式";
+    }
+    markPreset();
+  }
+
+  async function loadConfig() {
+    if (demoMode) {
+      $("key-status").textContent = "静态演示模式：请先运行 python web.py，再打开 http://127.0.0.1:8000";
+      return;
+    }
+    try {
+      applyConfigToForm(await fetchJson("/api/config"));
+    } catch (err) {
+      $("key-status").textContent = "无法读取后端配置：" + err.message;
+    }
+  }
+
+  function openSettings() {
+    if (demoMode) {
+      showError("静态演示模式无法保存配置：请先运行 python web.py，再访问 http://127.0.0.1:8000");
+      return;
+    }
+    setConfigMsg("");
+    $("settings-modal").hidden = false;
+    document.body.style.overflow = "hidden";
+    loadConfig();
+    setTimeout(() => $("api-key").focus(), 60);
+  }
+
+  function closeSettings() {
+    $("settings-modal").hidden = true;
+    $("api-key").value = "";
+    document.body.style.overflow = "";
+  }
+
+  function readConfigForm() {
+    return {
+      api_key: $("api-key").value.trim(),
+      base_url: $("base-url").value.trim(),
+      model: $("model-name").value.trim(),
+    };
+  }
+
+  async function testConnection() {
+    if (configBusy) return;
+    const payload = readConfigForm();
+    if (!payload.api_key && !configState.configured) {
+      setConfigMsg("请先填写 API Key。", "err");
+      return;
+    }
+    configBusy = true;
+    const btn = $("test-connection");
+    btn.disabled = true;
+    btn.textContent = "测试中…";
+    setConfigMsg("正在调用模型验证连接…", "busy");
+    try {
+      const data = await fetchJson("/api/config/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setConfigMsg("连接成功 · " + data.model + " · " + data.latency_ms + "ms", "ok");
+    } catch (err) {
+      setConfigMsg("连接失败：" + err.message, "err");
+    } finally {
+      configBusy = false;
+      btn.disabled = false;
+      btn.textContent = "测试连接";
+    }
+  }
+
+  async function saveConfig() {
+    if (configBusy) return;
+    const payload = readConfigForm();
+    if (!payload.api_key && !configState.configured) {
+      setConfigMsg("请先填写 API Key。", "err");
+      return;
+    }
+    configBusy = true;
+    const btn = $("save-config");
+    btn.disabled = true;
+    btn.textContent = "保存中…";
+    setConfigMsg("正在保存到后端内存…", "busy");
+    try {
+      const data = await fetchJson("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      applyConfigToForm(data);
+      setModePill({ llm_mode: data.mode, model: data.model });
+      setConfigMsg("保存成功：后续研究将使用 " + data.model, "ok");
+      showToast("模型配置已保存（仅本次运行）");
+      setTimeout(closeSettings, 900);
+    } catch (err) {
+      setConfigMsg("保存失败：" + err.message, "err");
+    } finally {
+      configBusy = false;
+      btn.disabled = false;
+      btn.textContent = "保存并使用";
+    }
+  }
+
+  async function clearConfig() {
+    if (configBusy) return;
+    if (!window.confirm("清除本次运行的配置，回到 .env / 离线模式？")) return;
+    configBusy = true;
+    try {
+      const data = await fetchJson("/api/config", { method: "DELETE" });
+      applyConfigToForm(data);
+      setModePill({ llm_mode: data.mode, model: data.model });
+      setConfigMsg("已清除运行时配置，当前模式：" + data.mode, "ok");
+      showToast("已清除运行时配置");
+    } catch (err) {
+      setConfigMsg("清除失败：" + err.message, "err");
+    } finally {
+      configBusy = false;
+    }
+  }
+
+  $("settings-btn").addEventListener("click", openSettings);
+  $("settings-close").addEventListener("click", closeSettings);
+  $("settings-modal").addEventListener("click", (event) => {
+    if (event.target === $("settings-modal")) closeSettings();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("settings-modal").hidden) closeSettings();
+  });
+  $("toggle-key").addEventListener("click", () => {
+    const input = $("api-key");
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    $("toggle-key").textContent = show ? "隐藏" : "显示";
+  });
+  document.querySelectorAll("#preset-row .preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#preset-row .preset").forEach((item) => item.classList.remove("active"));
+      btn.classList.add("active");
+      if (btn.dataset.base) $("base-url").value = btn.dataset.base;
+      if (btn.dataset.model) $("model-name").value = btn.dataset.model;
+      if (btn.dataset.provider === "ollama") {
+        $("key-status").textContent = "本地 Ollama 无需真实 Key，可填 ollama 作为占位";
+      }
+    });
+  });
+  ["base-url", "model-name"].forEach((id) => {
+    $(id).addEventListener("input", markPreset);
+  });
+  $("test-connection").addEventListener("click", testConnection);
+  $("save-config").addEventListener("click", saveConfig);
+  $("clear-config").addEventListener("click", clearConfig);
+
   // ---------- 事件绑定 ----------
   $("start-btn").addEventListener("click", startResearch);
   $("question").addEventListener("keydown", (event) => {
@@ -999,6 +1656,7 @@
   const prefillQuestion = urlParams.get("q");
   if (prefillQuestion) $("question").value = prefillQuestion;
   const autoStart = urlParams.get("autostart") === "1";
+  const openSettingsOnLoad = urlParams.get("settings") === "1";
 
   function maybeAutostart() {
     if (!autoStart) return;
@@ -1014,8 +1672,10 @@
       return resp.json();
     })
     .then((data) => {
-      $("mode-pill").textContent = data.llm_mode === "openai" ? "OpenAI 模式" : "离线启发式模式";
-      maybeAutostart();
+      setModePill(data);
+      loadConfig()
+        .then(() => { if (openSettingsOnLoad) openSettings(); })
+        .finally(maybeAutostart);
     })
     .catch(() => {
       enableDemoMode();

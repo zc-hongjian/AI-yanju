@@ -219,6 +219,8 @@ def analyze(
     final_errors = [f"[{e.get('node')}] {e.get('error')}" for e in errors][:5]
     if fail_reason and final_errors:
         fail_reason += "；" + "；".join(final_errors[:2])
+    coverage_summary = final.get("coverage_summary") or {}
+    verification = final.get("verification") or {}
 
     return {
         "id": entry.get("id"),
@@ -237,12 +239,21 @@ def analyze(
                 "quote": str(item.get("quote") or "")[:160],
                 "source_url": item.get("source_url"),
                 "confidence": item.get("confidence"),
+                "support": item.get("support", ""),
             }
             for item in evidence[:4]
         ],
         "evidence_count": len(evidence),
         "source_count": len(sources),
         "sub_questions": len(sub_questions),
+        # 研究质量闭环指标（P0）
+        "sub_questions_covered": int(coverage_summary.get("covered") or 0),
+        "sub_questions_total": int(coverage_summary.get("total") or 0),
+        "coverage_rate": round(float(coverage_summary.get("rate") or 0.0), 4),
+        "retrieval_rounds": int(final.get("retrieval_rounds") or 1),
+        "evidence_supported_rate": round(float(verification.get("support_rate") or 0.0), 4),
+        "evidence_usable_rate": round(float(verification.get("usable_rate") or 0.0), 4),
+        "evidence_unsupported": int(verification.get("dropped") or 0),
         "search_ok": search_ok,
         "fetch_ok": fetch_ok,
         "summarize_ok": bool(summarize_ok),
@@ -337,6 +348,20 @@ def build_summary(tag: str, mode: str, records: list[dict[str, Any]], llm: str =
         "evidence_verbatim_rate": _ratio(
             sum(round(rec["evidence_verbatim_rate"] * rec["evidence_count"]) for rec in records), evidence
         ),
+        # P0 质量闭环聚合：子问题覆盖率、断言支持率、平均检索轮次
+        "coverage_rate": _ratio(
+            sum(rec.get("sub_questions_covered", 0) for rec in records),
+            sum(rec.get("sub_questions_total", 0) for rec in records),
+        ),
+        "evidence_supported_rate": _ratio(
+            sum(round(rec.get("evidence_supported_rate", 0.0) * rec["evidence_count"]) for rec in records),
+            evidence,
+        ),
+        "avg_retrieval_rounds": round(
+            sum(rec.get("retrieval_rounds", 1) for rec in records) / total, 2
+        )
+        if total
+        else 0,
         "sub_questions_ok_rate": _ratio(
             sum(1 for rec in records if 3 <= rec["sub_questions"] <= 5), total
         ),
@@ -431,6 +456,13 @@ def main() -> int:
                 "evidence_count": 0,
                 "source_count": 0,
                 "sub_questions": 0,
+                "sub_questions_covered": 0,
+                "sub_questions_total": 0,
+                "coverage_rate": 0.0,
+                "retrieval_rounds": 1,
+                "evidence_supported_rate": 0.0,
+                "evidence_usable_rate": 0.0,
+                "evidence_unsupported": 0,
                 "search_ok": 0,
                 "fetch_ok": 0,
                 "summarize_ok": False,
@@ -465,6 +497,7 @@ def main() -> int:
         print(
             f"[{index:02d}/{len(dataset)}] {record['id']} {record['category']:<11} "
             f"success={record['success']} evidence={record['evidence_count']} "
+            f"cover={record.get('coverage_rate', 0):.0%} rounds={record.get('retrieval_rounds', 1)} "
             f"{record['elapsed_ms']}ms {record.get('fail_reason') or ''}",
             flush=True,
         )

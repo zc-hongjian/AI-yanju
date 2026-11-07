@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Iterable
 
 import prompts
@@ -258,6 +259,27 @@ class LLMClient:
 
     def usage_snapshot(self) -> dict[str, int]:
         return dict(self.usage)
+
+    def ping(self) -> dict[str, Any]:
+        """做一次最小真实调用，验证 Key / Base URL / 模型是否可用。
+
+        只用于前端「测试连接」；成功返回延迟与模型名，不返回任何密钥。
+        """
+        if self.mode != "openai":
+            raise LLMError("当前为离线模式，无法测试连接")
+        started = time.perf_counter()
+        reply = self._chat(
+            "你是连通性检查器。只输出 OK 两个字母，不要输出其他内容。",
+            "ping",
+            temperature=0.0,
+            max_tokens=8,
+        )
+        return {
+            "ok": True,
+            "model": self.model,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "reply": reply[:40],
+        }
 
     # ------------------------------------------------------------------ SDK
     def _sdk(self) -> Any:
@@ -633,14 +655,32 @@ def _noise_filter_enabled() -> bool:
     return os.getenv("AGENT_EVIDENCE_NOISE_FILTER", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _evidence_total_cap() -> int:
+    """离线抽取式证据的总条数上限；补检轮次需要更多证据来覆盖子问题。"""
+    try:
+        return max(4, min(30, int(os.getenv("AGENT_EVIDENCE_MAX", "16"))))
+    except ValueError:
+        return 16
+
+
+def _evidence_per_source_cap() -> int:
+    try:
+        return max(1, min(6, int(os.getenv("AGENT_EVIDENCE_PER_SOURCE", "3"))))
+    except ValueError:
+        return 3
+
+
 def heuristic_evidence(question: str, sources: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """抽取式证据：句子原文照抄，置信度按关键词命中估算。
 
     规则 3（宁缺毋滥）：与问题毫无关键词关联的句子直接丢弃；一条都没有就返回 []。
+    每个来源取前 N 句、总数有上限，避免补检后报告被低相关句子灌水。
     """
     kws = keywords(question)
     if not kws:
         return []
+    total_cap = _evidence_total_cap()
+    per_source_cap = _evidence_per_source_cap()
     items: list[dict[str, Any]] = []
     for source in sources:
         sentences = split_sentences(str(source.get("content") or ""))
@@ -673,11 +713,11 @@ def heuristic_evidence(question: str, sources: Iterable[dict[str, Any]]) -> list
                 }
             )
             picked += 1
-            if picked >= 2:
+            if picked >= per_source_cap:
                 break
-        if len(items) >= 8:
+        if len(items) >= total_cap:
             break
-    return items[:8]
+    return items[:total_cap]
 
 
 def _claim_key(text: str) -> str:

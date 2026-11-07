@@ -30,6 +30,7 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
@@ -65,7 +66,8 @@ try:
     from dotenv import load_dotenv
 
     from graph import build_graph
-    from llm_client import get_llm
+    from llm_client import LLMClient, get_llm
+    import llm_client
     from logging_utils import register_log_sink, unregister_log_sink
     from state import new_state
 except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟环境）
@@ -74,13 +76,20 @@ except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟
 # 必须在创建图 / 第一次请求前加载 .env，否则 web 版会一直停留在离线模式
 load_dotenv(BASE_DIR / ".env")
 
-app = FastAPI(title="LangGraph 研究助手", version="0.1.0")
+# 页面运行时填写的 LLM 配置只保存在本进程内存（不写 .env、不返回给前端明文）。
+# 服务重启后回到 .env 的配置。
+_LLM_ENV_KEYS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "AGENT_LLM_MODE")
+_STARTUP_ENV = {key: os.getenv(key) for key in _LLM_ENV_KEYS}
+_RUNTIME_CONFIG: dict[str, str] | None = None
+_CONFIG_LOCK = threading.Lock()
+
+app = FastAPI(title="LangGraph 研究助手", version="0.2.0")
 GRAPH = build_graph()
 try:
     _startup_llm = get_llm()
     print(
         f"[研究助手] LLM 模式={_startup_llm.mode} | 模型={_startup_llm.model} | "
-        f"Base={_startup_llm.base_url or 'OpenAI 默认'}（改 .env 后需重启本服务）",
+        f"Base={_startup_llm.base_url or 'OpenAI 默认'}；也可在网页右上角「模型设置」直接填写 Key（仅存内存，重启失效）",
         flush=True,
     )
 except Exception as exc:  # noqa: BLE001 - 启动日志失败不影响服务
@@ -95,6 +104,107 @@ class ResearchRequest(BaseModel):
 class ResumeRequest(BaseModel):
     thread_id: str
     value: dict[str, Any]
+
+
+class LLMConfigRequest(BaseModel):
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+def _mask_key(key: str) -> str:
+    key = (key or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "****"
+    return f"{key[:3]}****{key[-4:]}"
+
+
+def _current_llm_config() -> dict[str, str]:
+    """取当前生效配置：运行时 > 启动时 .env > 空。"""
+    if _RUNTIME_CONFIG:
+        return dict(_RUNTIME_CONFIG)
+    return {
+        "api_key": (os.getenv("OPENAI_API_KEY") or "").strip(),
+        "base_url": (os.getenv("OPENAI_BASE_URL") or "").strip(),
+        "model": (os.getenv("OPENAI_MODEL") or "").strip(),
+    }
+
+
+def _public_llm_config() -> dict[str, Any]:
+    """返回给前端的配置视图：永远不含明文 Key。"""
+    config = _current_llm_config()
+    llm = get_llm()
+    source = "runtime" if _RUNTIME_CONFIG else ("env" if config["api_key"] else "none")
+    return {
+        "configured": bool(config["api_key"]),
+        "mode": llm.mode,
+        "model": llm.model,
+        "base_url": llm.base_url or "",
+        "masked_key": _mask_key(config["api_key"]),
+        "source": source,
+    }
+
+
+def _validate_llm_config(req: LLMConfigRequest) -> tuple[str, str, str]:
+    """校验并合并配置；api_key 留空表示沿用当前已保存的 Key。"""
+    current = _current_llm_config()
+    key = (req.api_key or "").strip()
+    if key and ("\n" in key or "\r" in key or len(key) > 300):
+        raise HTTPException(status_code=400, detail="API Key 格式不合法")
+    key = key or current["api_key"]
+    if not key:
+        raise HTTPException(status_code=400, detail="请填写 API Key（当前没有可用配置）")
+
+    base = (req.base_url or "").strip().rstrip("/")
+    if not base and not (req.api_key or "").strip():
+        base = current["base_url"]
+    if base:
+        parsed = urlparse(base)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=400, detail="Base URL 必须是 http(s):// 开头的完整地址")
+
+    model = (req.model or "").strip() or current["model"] or "gpt-4o-mini"
+    if len(model) > 120 or any(char.isspace() for char in model):
+        raise HTTPException(status_code=400, detail="模型名不能包含空格，且长度不能超过 120")
+    return key, base, model
+
+
+def _apply_llm_config(key: str, base: str, model: str) -> None:
+    """保存到进程内存，并让后续节点使用新客户端（不写 .env）。"""
+    global _RUNTIME_CONFIG
+    llm = LLMClient(api_key=key, base_url=base or None, model=model, mode="openai")
+    with _CONFIG_LOCK:
+        llm_client.set_llm(llm)
+        _RUNTIME_CONFIG = {"api_key": key, "base_url": base, "model": model}
+        os.environ["OPENAI_API_KEY"] = key
+        os.environ["OPENAI_MODEL"] = model
+        os.environ["AGENT_LLM_MODE"] = "openai"
+        if base:
+            os.environ["OPENAI_BASE_URL"] = base
+        else:
+            os.environ.pop("OPENAI_BASE_URL", None)
+
+
+def _clear_runtime_config() -> None:
+    """清除运行时配置，恢复为启动时 .env 的配置（重启效果）。"""
+    global _RUNTIME_CONFIG
+    with _CONFIG_LOCK:
+        _RUNTIME_CONFIG = None
+        for key, value in _STARTUP_ENV.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        llm_client.reset_llm()
+
+
+def _safe_llm_error(exc: Exception, key: str) -> str:
+    text = f"{type(exc).__name__}: {exc}"
+    if key:
+        text = text.replace(key, "***")
+    return text[:500]
 
 
 def _pack(thread_id: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -170,8 +280,50 @@ def index() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "llm_mode": get_llm().mode}
+def health() -> dict[str, Any]:
+    llm = get_llm()
+    return {
+        "status": "ok",
+        "llm_mode": llm.mode,
+        "model": llm.model,
+        "configured": bool(llm.api_key),
+    }
+
+
+@app.get("/api/config")
+def get_llm_config() -> dict[str, Any]:
+    """返回当前 LLM 配置视图（masked_key，永远不含明文 Key）。"""
+    return _public_llm_config()
+
+
+@app.post("/api/config")
+def set_llm_config(req: LLMConfigRequest) -> dict[str, Any]:
+    """把页面填写的配置保存到进程内存；不写 .env，重启失效。"""
+    key, base, model = _validate_llm_config(req)
+    _apply_llm_config(key, base, model)
+    return _public_llm_config()
+
+
+@app.post("/api/config/test")
+def test_llm_config(req: LLMConfigRequest) -> dict[str, Any]:
+    """用页面填写的配置做一次最小真实调用；成功不代表配置已保存。"""
+    key = ""
+    try:
+        key, base, model = _validate_llm_config(req)
+        client = LLMClient(api_key=key, base_url=base or None, model=model, mode="openai")
+        result = client.ping()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 统一转成前端可读的 400
+        raise HTTPException(status_code=400, detail="连接失败：" + _safe_llm_error(exc, key)) from exc
+    return {**result, "masked_key": _mask_key(key), "base_url": base}
+
+
+@app.delete("/api/config")
+def clear_llm_config() -> dict[str, Any]:
+    """清除运行时配置，回到启动时 .env 的配置。"""
+    _clear_runtime_config()
+    return _public_llm_config()
 
 
 @app.post("/api/research")

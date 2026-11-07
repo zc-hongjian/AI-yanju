@@ -61,6 +61,18 @@ def metric_table(summary: dict[str, Any]) -> list[str]:
     lines.append(f"| 平均 token | {summary.get('avg_tokens', 0)} | - | - |")
     lines.append(f"| 来源去重率 | {pct(summary.get('dedup_rate'))} | 去重有效（>0 表示有重复被合并） | - |")
     lines.append(f"| 子问题拆解达标率 | {pct(summary.get('sub_questions_ok_rate'))} | 3~5 个/题 | - |")
+    if "coverage_rate" in summary:
+        lines.append(
+            f"| 子问题证据覆盖率（P0） | {pct(summary.get('coverage_rate'))} | ≥ 75% | "
+            f"{mark(float(summary.get('coverage_rate') or 0) >= 0.75)} |"
+        )
+    if "evidence_supported_rate" in summary:
+        lines.append(
+            f"| 证据断言支持率（P0） | {pct(summary.get('evidence_supported_rate'))} | ≥ 75% | "
+            f"{mark(float(summary.get('evidence_supported_rate') or 0) >= 0.75)} |"
+        )
+    if "avg_retrieval_rounds" in summary:
+        lines.append(f"| 平均检索轮次（P0） | {summary.get('avg_retrieval_rounds')} | - | - |")
     lines.append(f"| 人工确认平均次数 | {summary.get('avg_interrupts', 0)} | 3 次/题 | - |")
     lines.append("")
     return lines
@@ -138,10 +150,47 @@ def real_comparison_table(
         "",
         "优化内容：① 中文宽泛问题新增 360 搜索源（`so360`，结果 URL 取自 `data-mdurl`，绕过跳转）；"
         "② 证据抽取增加导航/表格/菜单噪声过滤（`_looks_like_noise`）；"
-        "③ 检索每查询返回数 5→8、抓取最多尝试 URL 5→8，提高绕过 403/JS 空页面的概率。",
+        "③ 检索每查询返回数 5→8、抓取最多尝试 URL 5→8；"
+        "④ P0：子问题覆盖检查 + 缺口补检（最多 2 轮）；"
+        "⑤ P0：抓取页数按对比/多跳自适应、候选重排、正文内容指纹去重；"
+        "⑥ P0：证据进入报告前做 claim→quote 支持性校验。",
         "",
         "**读法说明**：真实联网评测受搜索引擎返回质量与站点 403/超时的波动影响，单次 ±1~2 题属于网络噪声；"
-        "引用类指标的提升有一部分来自将无证据题从分母中剔除。证据相关性请以第 8 节人工抽样为准，而不是只看成功率。",
+        "引用类指标的提升有一部分来自将无证据题从分母中剔除。补检轮会提高延迟（平均轮次见 5.3），"
+        "证据相关性请以第 8 节人工抽样与第 3 节自动断言支持率为准，而不是只看成功率。",
+        "",
+    ]
+    return lines
+
+
+def p0_quality_table(before: dict[str, Any] | None, after: dict[str, Any] | None) -> list[str]:
+    """P0 研究质量闭环的前后对比（覆盖率/断言支持率/补检轮次为新增指标）。"""
+    if not after:
+        return ["（real_p0 尚未运行）", ""]
+    before = before or {}
+    rows = [
+        ("子问题证据覆盖率", "coverage_rate", "新增"),
+        ("证据断言支持率", "evidence_supported_rate", "新增"),
+        ("平均检索轮次", "avg_retrieval_rounds", "1.0（仅首轮）"),
+        ("任务成功率", "success_rate", "real_current"),
+        ("预期要点覆盖（宽松代理）", "fact_coverage", "real_current"),
+        ("平均延迟(ms)", "avg_latency_ms", "real_current"),
+    ]
+    lines = [
+        "| 指标 | 优化前（real_current） | 优化后（real_p0） | 说明 |",
+        "| --- | --- | --- | --- |",
+    ]
+    for label, key, note in rows:
+        old = before.get(key)
+        new = after.get(key)
+        old_text = "-" if old is None else (f"{old}" if key in {"avg_retrieval_rounds", "avg_latency_ms"} else pct(old))
+        new_text = f"{new}" if key in {"avg_retrieval_rounds", "avg_latency_ms"} else pct(new)
+        lines.append(f"| {label} | {old_text} | {new_text} | {note} |")
+    lines += [
+        "",
+        "P0 改动：① `check_coverage` 节点按子问题计算证据覆盖度，未达标时用缺口生成补检 query（默认最多 2 轮）；"
+        "② 抓取页数按对比/多跳自适应，候选按问题词与官方站点先验重排，正文按内容指纹去重；"
+        "③ 证据进入报告前做 claim→quote 支持性校验，明显外推/无关的结论会被过滤并记录。",
         "",
     ]
     return lines
@@ -229,17 +278,15 @@ def example_section(records: list[dict[str, Any]], q21_mock: dict[str, Any] | No
 
 
 def main() -> int:
-    after_tag = (
-        "real_llm"
-        if load_summary("real_llm") is not None
-        else "real_after_360"
-        if load_summary("real_after_360") is not None
-        else "real_final"
+    after_tag = next(
+        (tag for tag in ("real_p0", "real_llm", "real_after_360", "real_final") if load_summary(tag)),
+        "real_final",
     )
     real_after = load_summary(after_tag)
     real_before = load_summary("real_current")
     real = real_after or real_before
-    mock = load_summary("mock_current")
+    mock_tag = "mock_p0" if load_summary("mock_p0") else "mock_current"
+    mock = load_summary(mock_tag)
     baseline = load_summary("mock_baseline")
     q21_mock = load_summary("q21_mock")
     real_records = (
@@ -249,7 +296,7 @@ def main() -> int:
         or load_records("real_after_fix")
         or load_records("real_current")
     )
-    mock_records = load_records("mock_current")
+    mock_records = load_records(mock_tag)
     q21 = load_summary("real_q21")
 
     lines: list[str] = [
@@ -321,10 +368,12 @@ def main() -> int:
         "基线通过 `AGENT_LINK_CITATIONS=0 AGENT_PLAN_SUB_QUESTIONS=0` 关闭本轮新增能力，"
         "用于证明「引用可点击化」和「3~5 个子问题拆解」确实生效，而不是靠提示词自述。",
         "",
-        "### 5.2 真实联网优化（证据噪声过滤 / 抓取候选扩容）",
+        "### 5.2 真实联网优化（P0 前后对比）",
         "",
     ]
     lines += real_comparison_table(real_before, real_after, after_tag=after_tag)
+    lines += ["### 5.3 研究质量闭环（P0：子问题覆盖 + 断言校验）", ""]
+    lines += p0_quality_table(real_before, load_summary("real_p0"))
 
     lines += ["## 6. 示例题：Q21 预期 vs 实际", ""]
     lines += example_section(real_records or mock_records, q21_mock)
@@ -342,6 +391,8 @@ def main() -> int:
             f"- 抽样方式：从真实联网评测的 40 题结果中随机抽 {len(audit['samples'])} 条「关键发现」，"
             "回看其结论是否为完整句子、是否真的回答该题、是否来自该来源；",
             f"- 判定结果：支持 {audit['supported']}/{len(audit['samples'])}，准确率 {pct(audit['accuracy'])}；",
+            "- 说明：以上抽样来自 `real_after_360`（P0 之前）；`real_p0` 的「证据断言支持率」是自动代理指标，"
+            "尚未重新人工抽样，两者口径不同。",
             "",
             "| 题目 | 关键结论（截断） | 来源 | 判定 | 备注 |",
             "| --- | --- | --- | --- | --- |",
@@ -366,6 +417,8 @@ def main() -> int:
         "| 证据表（来源/摘要/可信度） | `state.evidence` + `final_output.evidence`，字段含 `source_url/source_snippet/confidence` | ✅ |",
         "| 结构化 Markdown 报告 | `DRAFT_SYSTEM` 固定摘要/关键发现/局限与未证实三段式 | ✅ |",
         "| 引用校验 | `filter_evidence` 逐字校验 + `_sanitize_report` URL 白名单 + `[S#]` 链接化 | ✅ |",
+        "| 子问题覆盖 / 缺口补检（P0） | `check_coverage` + `quality.compute_coverage`；覆盖率与轮次见第 3 节 | ✅ |",
+        "| claim 支持性校验（P0） | `quality.verify_evidence`；自动支持率见第 3 节 | ✅ |",
         "| 人工确认可暂停/修改/继续 | 3 处 `interrupt()`；pytest 覆盖通过/修改/终止分支 | ✅ |",
         "| 失败重试与降级 | 工具重试 3 次 + 指数退避 + 熔断；失败案例见第 7 节 | ✅ |",
         "| 可观测（trace/日志/token/耗时） | `final_output` 含 `trace_id/log_summary/token_usage/cost_cny/duration_ms`；JSONL 日志 | ✅ |",
@@ -375,6 +428,12 @@ def main() -> int:
         "- 本次环境没有 `OPENAI_API_KEY`，LLM 走离线启发式：**token/成本真实数据为 0**，P95 延迟也不包含模型推理时间；"
         "接入真实模型后需要重跑本评测才能给出真实成本与延迟。",
         "- 真实联网评测的检索质量受搜索引擎可用性影响（部分站点 403 / 区域不可达 / PDF 链接），失败案例见第 7 节。",
+        "- P0 的「子问题覆盖率」目前 51.2%，低于 75% 目标：主要卡在对比题只抓到一方、"
+        "部分站点 403/JS 空页；下一步应按实体分别检索、扩展官方搜索 API / PDF 解析。",
+        "- P0 的「证据断言支持率」是规则版代理（bigram / 数字 / 实体 / 否定词一致性），"
+        "不是语义蕴含判断；它只用于拦截明显外推，最终仍需人工抽检。",
+        "- 补检轮会提高延迟（real_p0 平均 15.6s、P95 26.7s，平均 1.68 轮）；"
+        "后续需要并发抓取、缓存与按轮次收紧预算来控制 P95。",
         "- 事实准确率：宽松代理（预期要点 bigram 覆盖）与人工抽样（第 8 节）只是近似，不能替代独立标注；"
         "上线前建议扩展到 100+ 题并双人标注。",
         "- mock fixture 只验证流水线机制，不代表真实检索效果；勿把 mock 的高分当作产品指标。",
@@ -383,10 +442,12 @@ def main() -> int:
         "",
         "```bash",
         "python evaluation/run_eval.py --mode mock --tag mock_current",
+        "python evaluation/run_eval.py --mode mock --tag mock_p0",
         "python evaluation/run_eval.py --mode mock --tag q21_mock --ids Q21",
         "python evaluation/run_eval.py --mode mock --tag mock_baseline --no-link-citations --no-sub-questions",
         "python evaluation/run_eval.py --mode real --tag real_current",
         "python evaluation/run_eval.py --mode real --tag real_after_360",
+        "python evaluation/run_eval.py --mode real --tag real_p0",
         "python evaluation/make_report.py",
         "```",
         "",

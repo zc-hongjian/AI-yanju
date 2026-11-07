@@ -1,7 +1,9 @@
-"""LangGraph 图定义：10 个节点 + 三处人工中断 + 条件边 + checkpoint。
+"""LangGraph 图定义：11 个节点 + 三处人工中断 + 条件边 + checkpoint。
 
 流程：
 receive_question → plan_research → search_web → fetch_pages → summarize_sources
+→ check_coverage ─┬─(覆盖不足)→ search_web（补检一轮）→ fetch_pages → summarize_sources → check_coverage
+                  └─(覆盖达标/无补检预算)→ draft_report
 → draft_report → human_review_draft ─┬─(通过)→ human_confirm_actions → execute_actions → finalize
                                       ├─(修改)→ draft_report
                                       └─(终止)→ finalize
@@ -13,6 +15,7 @@ human_review_draft 与 human_confirm_actions 内部共调用三次 interrupt()�
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import time
@@ -28,11 +31,39 @@ import prompts
 import tools
 from llm_client import get_llm
 from logging_utils import StepLog, log_stats, now_iso, summarize_text
+from quality import compute_coverage, coverage_terms, gap_queries_for, verify_evidence
 from state import ResearchState
 
 MAX_PAGES = int(os.getenv("AGENT_MAX_PAGES", "3"))
 MAX_QUERIES = int(os.getenv("AGENT_MAX_QUERIES", "3"))
 MAX_REVISIONS = int(os.getenv("AGENT_MAX_REVISIONS", "2"))
+
+# ---- 研究质量闭环（P0）：覆盖 → 补检 → 校验 ----
+# 最多检索几轮（含首轮）。默认 2：首轮之外最多补检 1 轮，避免网络成本失控。
+MAX_RETRIEVAL_ROUNDS = max(1, int(os.getenv("AGENT_MAX_RETRIEVAL_ROUNDS", "2")))
+# 子问题覆盖率低于该阈值时触发补检
+COVERAGE_MIN_RATE = float(os.getenv("AGENT_COVERAGE_MIN", "0.75"))
+# 单个子问题算“已覆盖”的分数阈值
+COVERAGE_THRESHOLD = float(os.getenv("AGENT_COVERAGE_THRESHOLD", "0.6"))
+# 一次补检最多生成几条 query
+MAX_GAP_QUERIES = max(1, int(os.getenv("AGENT_MAX_GAP_QUERIES", "2")))
+# 抓取页数硬上限（自适应目标不会超过它）
+MAX_PAGES_HARD = max(MAX_PAGES, int(os.getenv("AGENT_MAX_PAGES_HARD", "6")))
+
+COMPARISON_RE = re.compile(r"对比|比较|区别|差异|优劣|优缺点|哪个更|vs\b|VS\b", re.I)
+MULTIHOP_RE = re.compile(r"为什么|如何|怎么|步骤|流程|机制|原理|分别|哪些因素|前置条件", re.I)
+OFFICIAL_HOST_HINTS = (
+    "langchain.com",
+    "langchain.cn",
+    "langgraph.com.cn",
+    "github.com",
+    "wikipedia.org",
+    "openai.com",
+    "docs.",
+    ".gov",
+    ".edu",
+)
+
 URL_RE = re.compile(r"(?i)(?:https?|ftp)://[^\s)\]\"'<>，。；]+")
 MD_LINK_RE = re.compile(r"(?i)\[([^\]\n]+)\]\(((?:https?|ftp)://[^)\s]+)\)")
 SOURCE_TITLES = {"来源清单", "参考来源", "来源", "references", "sources", "reference"}
@@ -79,6 +110,63 @@ def _sources_from_pages(pages: list[dict[str, Any]]) -> list[dict[str, str]]:
         for page in pages
         if page.get("url")
     ]
+
+
+def _page_target(state: ResearchState) -> int:
+    """按问题类型与检索轮次自适应抓取页数（仍受 MAX_PAGES_HARD 约束）。
+
+    对比/多跳类问题天然需要更多来源，首轮 3 页经常只够覆盖一方；
+    补检轮再 +1，但最多 MAX_PAGES_HARD 页，避免无限膨胀。
+    """
+    question = str(state.get("research_question") or "")
+    sub_questions = " ".join(str(q) for q in (state.get("plan") or {}).get("sub_questions") or [])
+    text = f"{question} {sub_questions}"
+    target = MAX_PAGES
+    if COMPARISON_RE.search(text):
+        target += 1
+    if MULTIHOP_RE.search(text):
+        target += 1
+    target += min(1, int(state.get("retrieval_round") or 0))
+    return max(1, min(MAX_PAGES_HARD, target))
+
+
+def _rank_bonus(hit: dict[str, Any], terms: list[str]) -> float:
+    """检索结果重排：问题词命中 + 官方/文档站点先验，避免完全按搜索引擎顺序抓。"""
+    title = str(hit.get("title") or "")
+    snippet = str(hit.get("snippet") or "")
+    url = str(hit.get("url") or "")
+    text = f"{title} {snippet}".lower()
+    bonus = 0.0
+    if terms:
+        matched = sum(1 for term in terms if term in text)
+        bonus += min(0.3, 0.05 * matched)
+    host = (urlparse(url).hostname or "").lower()
+    if any(hint in host for hint in OFFICIAL_HOST_HINTS):
+        bonus += 0.15
+    if url.lower().endswith(".pdf"):
+        bonus -= 0.1  # PDF 抓取失败率更高，同等条件下稍后尝试
+    return bonus
+
+
+def _content_fingerprint(content: str) -> str:
+    """内容级去重指纹：归一化后取前 600 字符哈希，识别转载/镜像/重复正文。"""
+    compact = re.sub(r"\s+", "", str(content or ""))[:600]
+    if not compact:
+        return ""
+    return hashlib.md5(compact.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _merge_hits(existing: list[dict[str, Any]], new_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 URL 合并两轮检索结果；保留首轮顺序与原始 score。"""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for hit in [*existing, *new_hits]:
+        url = str(hit.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        merged.append(dict(hit))
+    return merged
 
 
 # ================================================================ 节点 1：接收问题
@@ -142,7 +230,14 @@ def plan_research(state: ResearchState) -> dict[str, Any]:
 def search_web_node(state: ResearchState) -> dict[str, Any]:
     sl = StepLog(state)
     plan = state.get("plan") or {}
-    queries = list(plan.get("queries") or [])[:MAX_QUERIES]
+    existing_results = list(state.get("search_results") or [])
+    gap_queries = list(state.get("gap_queries") or [])
+    round_no = int(state.get("retrieval_round") or 0)
+    if gap_queries:
+        # 第二轮：只搜 check_coverage 指出的缺口，不再重复首轮 query
+        queries = gap_queries[:MAX_GAP_QUERIES]
+    else:
+        queries = list(plan.get("queries") or [])[:MAX_QUERIES]
     if not queries:
         queries = [{"query": state.get("research_question", ""), "max_results": 5}]
     results: list[dict[str, Any]] = []
@@ -170,7 +265,7 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
             sl.add(
                 node_name="search_web",
                 tool_name="search_web",
-                input_summary=query,
+                input_summary=f"[第{round_no + 1}轮] {query}",
                 output_summary=f"{len(hits)} 条结果",
                 status="ok",
                 retry_count=max(0, result.attempts - 1),
@@ -189,7 +284,7 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
             sl.add(
                 node_name="search_web",
                 tool_name="search_web",
-                input_summary=query,
+                input_summary=f"[第{round_no + 1}轮] {query}",
                 output_summary=result.summary(),
                 status="error",
                 retry_count=max(0, result.attempts - 1),
@@ -212,14 +307,7 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
             status="degraded",
             error=f"检索时间预算 {search_budget:.0f}s 耗尽",
         )
-    deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for hit in results:
-        url = str(hit.get("url") or "").strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        deduped.append(hit)
+    deduped = _merge_hits(existing_results, results)
     if not deduped:
         sl.add(
             node_name="search_web",
@@ -229,18 +317,37 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
             status="degraded",
             error="检索未返回任何结果",
         )
-    return sl.updates(search_results=deduped, errors=errors, retry_counts=retry_counts)
+    return sl.updates(
+        search_results=deduped,
+        gap_queries=[],  # 本轮已消费；下一轮由 check_coverage 重新生成
+        errors=errors,
+        retry_counts=retry_counts,
+    )
 
 
 # ================================================================ 节点 4：抓正文
 def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     sl = StepLog(state)
+    existing_pages = list(state.get("fetched_pages") or [])
+    fetched_urls = {str(page.get("url") or "") for page in existing_pages}
+    seen_fingerprints = {_content_fingerprint(str(page.get("content") or "")) for page in existing_pages}
+    seen_fingerprints.discard("")
+
+    plan = state.get("plan") or {}
+    terms = coverage_terms(
+        f"{state.get('research_question') or ''} " + " ".join(str(q) for q in plan.get("sub_questions") or [])
+    )
     candidates = sorted(
-        state.get("search_results") or [],
-        key=lambda hit: float(hit.get("score") or 0),
+        (
+            hit
+            for hit in state.get("search_results") or []
+            if str(hit.get("url") or "").strip() not in fetched_urls
+        ),
+        key=lambda hit: float(hit.get("score") or 0) + _rank_bonus(hit, terms),
         reverse=True,
     )
-    pages: list[dict[str, Any]] = []
+    pages: list[dict[str, Any]] = list(existing_pages)
+    page_target = _page_target(state)
     errors = list(state.get("errors") or [])
     retry_counts = dict(state.get("retry_counts") or {})
     fetch_budget = float(os.getenv("AGENT_FETCH_NODE_BUDGET", "45"))
@@ -253,8 +360,9 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     stop_reason: str | None = None
     failed_hosts: set[str] = set()
     skipped_same_host = 0
+    skipped_duplicate = 0
     for hit in candidates:
-        if len(pages) >= MAX_PAGES:
+        if len(pages) >= page_target:
             break
         if attempts >= max_attempts:
             stop_reason = f"尝试 {attempts} 个 URL 后停止（上限 {max_attempts} 个）"
@@ -277,6 +385,21 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
         if result.ok:
             page = dict(result.data or {})
             page["search_title"] = str(hit.get("title") or "")
+            fingerprint = _content_fingerprint(str(page.get("content") or ""))
+            if fingerprint and fingerprint in seen_fingerprints:
+                skipped_duplicate += 1
+                sl.add(
+                    node_name="fetch_pages",
+                    tool_name="fetch_page",
+                    input_summary=url,
+                    output_summary="正文与已抓取页面重复（转载/镜像），跳过",
+                    status="skipped",
+                    retry_count=max(0, result.attempts - 1),
+                    latency_ms=result.latency_ms,
+                )
+                continue
+            if fingerprint:
+                seen_fingerprints.add(fingerprint)
             pages.append(page)
             encoding = str(page.get("encoding") or "未知")
             dropped_blocks = int(page.get("dropped_blocks") or 0)
@@ -319,7 +442,7 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
         sl.add(
             node_name="fetch_pages",
             input_summary=f"已尝试 {attempts} 个 URL",
-            output_summary=f"{stop_reason}；成功 {len(pages)} 个页面",
+            output_summary=f"{stop_reason}；本轮页数 {len(pages) - len(existing_pages)}，累计 {len(pages)} 页",
             status="degraded",
             error=stop_reason,
         )
@@ -328,6 +451,20 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
             node_name="fetch_pages",
             input_summary=f"跳过 {skipped_same_host} 个同域候选",
             output_summary="同一域名首次抓取失败后，后续同域候选不再重复尝试",
+            status="skipped",
+        )
+    if skipped_duplicate:
+        sl.add(
+            node_name="fetch_pages",
+            input_summary=f"跳过 {skipped_duplicate} 个重复正文",
+            output_summary="按内容指纹去重：同一篇正文的转载/镜像不再进入证据",
+            status="skipped",
+        )
+    if not candidates:
+        sl.add(
+            node_name="fetch_pages",
+            input_summary=f"累计候选 {len(state.get('search_results') or [])} 个 URL",
+            output_summary="没有新的候选 URL 可抓取（本轮全部是已抓取页面）",
             status="skipped",
         )
     if not pages:
@@ -359,6 +496,7 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
         return sl.updates(
             evidence=[],
             evidence_note="未找到可靠来源（没有成功抓取的网页正文）",
+            verification={},
             errors=errors,
             retry_counts=retry_counts,
         )
@@ -376,8 +514,13 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
     )
     if result.ok:
         data = result.data or {}
-        evidence = list(data.get("evidence") or [])
+        raw_evidence = list(data.get("evidence") or [])
+        # P0：claim 级校验——只保留“结论能被引文支持（或部分支持）”的证据，
+        # 明显外推/无关的条目从证据列表移除并记录，避免进入报告。
+        evidence, verification = verify_evidence(raw_evidence)
         note = str(data.get("note") or "")
+        if verification.get("dropped"):
+            note = (note + f"；已过滤 {verification['dropped']} 条未被原文支持的结论").lstrip("；")
         status = "ok" if evidence else "degraded"
         if not evidence:
             errors.append(
@@ -387,7 +530,11 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
             node_name="summarize_sources",
             tool_name="summarize_sources",
             input_summary=f"{len(sources)} 个来源",
-            output_summary=f"{len(evidence)} 条证据；mode={data.get('mode')}；{summarize_text(note, 70)}",
+            output_summary=(
+                f"{len(evidence)}/{len(raw_evidence)} 条可用证据；"
+                f"支持率={verification.get('support_rate', 0):.0%}；"
+                f"mode={data.get('mode')}；{summarize_text(note, 60)}"
+            ),
             status=status,
             retry_count=max(0, result.attempts - 1),
             latency_ms=result.latency_ms,
@@ -395,6 +542,7 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
         )
     else:
         evidence = []
+        verification = {}
         note = f"证据总结失败：{result.error}"
         errors.append(
             {
@@ -418,9 +566,85 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
     return sl.updates(
         evidence=evidence,
         evidence_note=note,
+        verification=verification,
         errors=errors,
         retry_counts=retry_counts,
     )
+
+
+# ================================================================ 节点 5.5：覆盖检查 / 缺口补检
+def check_coverage(state: ResearchState) -> dict[str, Any]:
+    """检查证据对子问题的覆盖度；不足时生成补检 query，最多补一轮。
+
+    这是 P0 的关键节点：把“问题拆解”从展示字段变成真正的检索驱动信号。
+    """
+    sl = StepLog(state)
+    plan = state.get("plan") or {}
+    sub_questions = [str(item).strip() for item in plan.get("sub_questions") or [] if str(item).strip()]
+    evidence = list(state.get("evidence") or [])
+    round_no = int(state.get("retrieval_round") or 0)
+    if not sub_questions:
+        sl.add(
+            node_name="check_coverage",
+            input_summary="0 个子问题",
+            output_summary="没有可检查的子问题，跳过覆盖度评估",
+            status="skipped",
+        )
+        return sl.updates(
+            coverage=[],
+            coverage_summary={"total": 0, "covered": 0, "rate": 0.0, "uncovered": []},
+            gap_queries=[],
+        )
+
+    coverage, summary = compute_coverage(sub_questions, evidence, threshold=COVERAGE_THRESHOLD)
+    rate = float(summary.get("rate") or 0.0)
+    existing_queries = [str((item or {}).get("query") or "") for item in plan.get("queries") or []]
+    can_gap = round_no + 1 < MAX_RETRIEVAL_ROUNDS and bool(evidence or state.get("fetched_pages"))
+    gaps = (
+        gap_queries_for(
+            coverage,
+            question=str(state.get("research_question") or ""),
+            existing_queries=existing_queries,
+            limit=MAX_GAP_QUERIES,
+            max_results=6,
+        )
+        if can_gap and rate < COVERAGE_MIN_RATE
+        else []
+    )
+    detail = f"覆盖 {summary.get('covered', 0)}/{summary.get('total', 0)} 子问题（{rate:.0%}）"
+    if gaps:
+        sl.add(
+            node_name="check_coverage",
+            input_summary=f"{len(sub_questions)} 个子问题；第 {round_no + 1} 轮检索后",
+            output_summary=(
+                f"{detail}，低于阈值 {COVERAGE_MIN_RATE:.0%}；"
+                f"发起第 {round_no + 2} 轮补检：{summarize_text([g['query'] for g in gaps], 90)}"
+            ),
+            status="degraded",
+            error="子问题覆盖不足，已触发补检",
+        )
+        return sl.updates(
+            coverage=coverage,
+            coverage_summary=summary,
+            gap_queries=gaps,
+            retrieval_round=round_no + 1,
+        )
+
+    sl.add(
+        node_name="check_coverage",
+        input_summary=f"{len(sub_questions)} 个子问题；第 {round_no + 1} 轮检索后",
+        output_summary=(
+            f"{detail}，达到阈值 {COVERAGE_MIN_RATE:.0%}"
+            if rate >= COVERAGE_MIN_RATE
+            else f"{detail}，未达阈值但已无补检轮次/可用 query"
+        ),
+        status="ok" if rate >= COVERAGE_MIN_RATE else "degraded",
+    )
+    return sl.updates(coverage=coverage, coverage_summary=summary, gap_queries=[])
+
+
+def route_after_coverage(state: ResearchState) -> Literal["search_web", "draft_report"]:
+    return "search_web" if state.get("gap_queries") else "draft_report"
 
 
 # ================================================================ 节点 6：草稿
@@ -536,6 +760,9 @@ def human_review_draft(state: ResearchState) -> dict[str, Any]:
         "sources": _sources_from_pages(state.get("fetched_pages") or []),
         "evidence_count": len(state.get("evidence") or []),
         "revision_count": int(state.get("revision_count") or 0),
+        # 质量元数据：让审核者知道“覆盖了多少子问题、证据支持率如何”
+        "coverage_summary": state.get("coverage_summary") or {},
+        "verification": state.get("verification") or {},
     }
     decision = interrupt(payload)  # ← 在这里暂停，等待 Command(resume=...)
     if not isinstance(decision, dict):
@@ -819,11 +1046,15 @@ def finalize(state: ResearchState) -> dict[str, Any]:
     except ValueError:
         duration_ms = 0
     plan = state.get("plan") or {}
+    coverage_summary = state.get("coverage_summary") or {}
+    verification = state.get("verification") or {}
     sl.add(
         node_name="finalize",
         input_summary=f"证据={len(evidence)}；动作={len(actions)}；错误={len(errors)}",
         output_summary=(
             f"status={status}；日志步骤={stats['total'] + 1}；重试={stats['retries']}；"
+            f"覆盖={coverage_summary.get('covered', 0)}/{coverage_summary.get('total', 0)}；"
+            f"支持率={verification.get('support_rate', 0):.0%}；"
             f"耗时={duration_ms}ms；token={token_usage['total_tokens']}；成本=¥{cost_cny}"
         ),
         status="ok" if status.startswith("completed") else "degraded",
@@ -838,6 +1069,11 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         "evidence_note": state.get("evidence_note", ""),
         "sub_questions": list(plan.get("sub_questions") or []),
         "queries": list(plan.get("queries") or []),
+        # 研究质量闭环：覆盖度、断言校验、实际检索轮次
+        "coverage": state.get("coverage") or [],
+        "coverage_summary": coverage_summary,
+        "verification": verification,
+        "retrieval_rounds": int(state.get("retrieval_round") or 0) + 1,
         "actions": actions,
         "approved_actions": state.get("approved_actions") or [],
         "errors": errors,
@@ -862,6 +1098,7 @@ def build_graph(checkpointer: Any | None = None) -> Any:
     builder.add_node("search_web", search_web_node)
     builder.add_node("fetch_pages", fetch_pages_node)
     builder.add_node("summarize_sources", summarize_sources_node)
+    builder.add_node("check_coverage", check_coverage)
     builder.add_node("draft_report", draft_report)
     builder.add_node("human_review_draft", human_review_draft)
     builder.add_node("human_confirm_actions", human_confirm_actions)
@@ -873,7 +1110,15 @@ def build_graph(checkpointer: Any | None = None) -> Any:
     builder.add_edge("plan_research", "search_web")
     builder.add_edge("search_web", "fetch_pages")
     builder.add_edge("fetch_pages", "summarize_sources")
-    builder.add_edge("summarize_sources", "draft_report")
+    builder.add_edge("summarize_sources", "check_coverage")
+    builder.add_conditional_edges(
+        "check_coverage",
+        route_after_coverage,
+        {
+            "search_web": "search_web",  # 覆盖不足 → 补检一轮，再走抓取/总结
+            "draft_report": "draft_report",
+        },
+    )
     builder.add_edge("draft_report", "human_review_draft")
     builder.add_conditional_edges(
         "human_review_draft",
@@ -915,6 +1160,18 @@ def render_final_output(final: dict[str, Any]) -> str:
         f"- 状态：{final.get('status', '')}",
         f"- 来源数：{len(final.get('sources') or [])}；证据数：{final.get('evidence_count', 0)}",
         f"- 子问题：{len(final.get('sub_questions') or [])} 个；耗时：{final.get('duration_ms', 0)}ms",
+        (
+            f"- 证据覆盖：{(final.get('coverage_summary') or {}).get('covered', 0)}/"
+            f"{(final.get('coverage_summary') or {}).get('total', 0)} 子问题"
+            f"（{(final.get('coverage_summary') or {}).get('rate', 0):.0%}）；"
+            f"检索轮次：{final.get('retrieval_rounds', 1)}"
+        ),
+        (
+            f"- 断言校验：支持 {(final.get('verification') or {}).get('supported', 0)} / "
+            f"部分 {(final.get('verification') or {}).get('partial', 0)} / "
+            f"丢弃 {(final.get('verification') or {}).get('dropped', 0)}"
+            f"（支持率 {(final.get('verification') or {}).get('support_rate', 0):.0%}）"
+        ),
         f"- token：{(final.get('token_usage') or {}).get('total_tokens', 0)}；成本：¥{final.get('cost_cny', 0)}；LLM 模式：{final.get('llm_mode', '')}",
         f"- trace_id：{final.get('trace_id', '')}",
         "",

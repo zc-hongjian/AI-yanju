@@ -96,6 +96,16 @@ class ResearchState(TypedDict, total=False):
     action_results: list[ActionResult]
     evidence_note: str
 
+    # ---- 研究质量闭环（P0） ----
+    # 子问题覆盖度：见 quality.compute_coverage()
+    coverage: list[dict[str, Any]]
+    coverage_summary: dict[str, Any]
+    # 证据断言校验：见 quality.verify_evidence()
+    verification: dict[str, Any]
+    # 检索轮次：0=首轮；1=已做一次补检。补检由 check_coverage 节点决定。
+    retrieval_round: int
+    gap_queries: list[dict[str, Any]]
+
 
 def new_state(
     research_question: str,
@@ -129,4 +139,9 @@ def new_state(
         run_log_path=str(log_root / f"research-{trace_id}.jsonl"),
         action_results=[],
         evidence_note="",
+        coverage=[],
+        coverage_summary={},
+        verification={},
+        retrieval_round=0,
+        gap_queries=[],
     )

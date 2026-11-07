@@ -19,7 +19,9 @@ flowchart TD
     B --> C[search_web 工具]
     C --> D[fetch_pages 工具]
     D --> E[summarize_sources 工具]
-    E --> F[draft_report]
+    E --> Q{check_coverage<br/>子问题覆盖度}
+    Q -- 覆盖不足 --> C
+    Q -- 覆盖达标 --> F[draft_report]
     F --> G{human_review_draft<br/>interrupt ① 草稿}
     G -- 通过 --> H{human_confirm_actions<br/>interrupt ② 发邮件前<br/>interrupt ③ 存 Notion 前}
     G -- 修改意见 --> F
@@ -28,6 +30,9 @@ flowchart TD
     I --> J
 ```
 
+- **研究质量闭环（P0）**：`check_coverage` 会按 3~5 个子问题计算证据覆盖度；低于阈值时
+  用缺口生成补检 query，最多再检索一轮（默认总轮次 2）；`summarize_sources` 进入报告前还会做
+  claim→quote 支持性校验，明显外推/无关的“证据”会被过滤并记录。
 - **三处 `interrupt()`**：草稿审核、发邮件前、存 Notion 前。后两处都在 `human_confirm_actions`
   节点内顺序执行，各自产生一次独立的暂停/恢复，因此邮件与 Notion 可以分别同意或拒绝。
 - 图编译时挂 `InMemorySaver` checkpointer，`invoke` 返回 `__interrupt__`，
@@ -50,8 +55,9 @@ flowchart TD
 
 ```
 .
-├── graph.py             # LangGraph 图：10 个节点 + 条件边 + interrupt + checkpointer
+├── graph.py             # LangGraph 图：11 个节点 + 条件边 + interrupt + checkpointer
 ├── state.py             # ResearchState TypedDict + 初始状态
+├── quality.py           # P0 质量闭环：子问题覆盖度 + claim→quote 支持性校验
 ├── tools.py             # 5 个工具、JSON Schema、重试装饰逻辑、写操作门禁
 ├── text_clean.py        # 网页编码探测（charset_normalizer）+ 乱码段落清洗
 ├── prompts.py           # 全部提示词
@@ -84,7 +90,8 @@ flowchart TD
     ├── test_evidence_integrity.py# 编造 URL、改写引文被过滤；报告 URL 白名单清洗
     ├── test_encoding.py          # GBK/UTF-16 探测、乱码段落丢弃、整页乱码确定性失败
     ├── test_draft_template.py    # 三段式报告、[S#] 引用、可点击化、来源清单重建
-    └── test_planning.py          # 检索规划、3~5 个子问题、JSON 解析
+    ├── test_planning.py          # 检索规划、3~5 个子问题、JSON 解析
+    └── test_research_quality.py  # P0：覆盖度、缺口补检、claim 支持校验
 ```
 
 ## 3. 安装
@@ -113,7 +120,13 @@ cp .env.example .env        # Windows: copy .env.example .env
 | `OPENAI_BASE_URL` | 兼容 OpenAI 的网关地址，可留空 |
 | `OPENAI_MODEL` | 模型名，默认 `gpt-4o-mini` |
 | `AGENT_LLM_MODE` | `auto`（默认）/ `openai` / `offline` |
-| `AGENT_MAX_PAGES` | 最多抓取页面数，默认 3 |
+| `AGENT_MAX_PAGES` | 最多抓取页面数（基础值），默认 3；对比/多跳题会自动 +1，补检轮再 +1 |
+| `AGENT_MAX_PAGES_HARD` | 自适应抓取页数硬上限，默认 6 |
+| `AGENT_MAX_RETRIEVAL_ROUNDS` | 总检索轮次上限，默认 2（首轮 + 最多 1 轮补检） |
+| `AGENT_COVERAGE_MIN` | 触发补检的子问题覆盖率阈值，默认 0.75 |
+| `AGENT_COVERAGE_THRESHOLD` | 单个子问题算“已覆盖”的分数阈值，默认 0.6 |
+| `AGENT_MAX_GAP_QUERIES` | 一次补检最多生成几条 query，默认 2 |
+| `AGENT_EVIDENCE_MAX` / `AGENT_EVIDENCE_PER_SOURCE` | 离线抽取式证据总条数 / 每来源条数上限，默认 16 / 3 |
 | `AGENT_TOOL_MAX_ATTEMPTS` | 工具最大尝试次数，默认 3 |
 | `AGENT_RETRY_BASE_DELAY` | 指数退避基数，默认 0.5 秒（0.5 → 1 → 2 …） |
 | `AGENT_SEARCH_PROVIDERS` | 搜索提供方顺序，默认 `bing,so360,duckduckgo,wikipedia`；中文宽泛问题自动把 360 提前 |
@@ -134,11 +147,12 @@ cp .env.example .env        # Windows: copy .env.example .env
 | `AGENT_AUTO_APPROVE` | `1` 时跳过交互自动批准（仅演示/CI） |
 | `AGENT_WEB_PORT` | 网页版端口，默认 `8000` |
 
-密钥只从 `.env` 读取，代码里没有硬编码。
+密钥来源优先级：**网页「模型设置」保存的运行时配置**（仅进程内存，重启失效）→ `.env` → 离线模式；
+代码里没有硬编码 Key。运行时配置不会写回 `.env`。
 
 ### 4.1 接入真实大模型（OpenAI / 国内兼容接口 / 本地）
 
-目前默认跑离线启发式；接入真实模型只需要三步：
+目前默认跑离线启发式；接入真实模型只需要三步（也可以跳过 `.env`，直接在网页右上角「模型设置」里填写）：
 
 **① 创建 `.env` 并填 Key**（`.env` 已在 `.gitignore` 里，不会进仓库；**不要把 Key 填进 `.env.example`，它只是模板，程序不会读取**）：
 
@@ -285,9 +299,32 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 | `POST /api/research` `{"question": "..."}` | 启动一次研究，返回第一次中断或最终结果 |
 | `POST /api/resume` `{"thread_id": "...", "value": {...}}` | 提交人工确认，返回下一次中断或最终结果 |
 | `POST /api/research/stream` / `POST /api/resume/stream` | 同上，但用 NDJSON **实时推送日志**，最后一行是 `result` 或 `error` |
-| `GET /api/health` | 健康检查与当前 LLM 模式 |
+| `GET /api/health` | 健康检查、当前 LLM 模式/模型 |
+| `GET /api/config` | 当前模型配置视图（`masked_key`，不含明文 Key） |
+| `POST /api/config` | 保存页面填写的 Key / Base URL / 模型到**进程内存** |
+| `POST /api/config/test` | 用当前表单做一次最小真实调用，验证 Key 是否可用 |
+| `DELETE /api/config` | 清除运行时配置，回到 `.env` 或离线模式 |
 
 网页默认走流式接口：搜索、抓取每完成一步，进度表就会实时出现一行日志，不会整段“看起来卡住”。
+
+### 5.5.1 在页面里配置模型（右上角「模型设置」）
+
+深色主题页面右上角有 **模型设置** 按钮，打开后可以：
+
+- 选择提供方预设（DeepSeek / OpenAI / 通义千问 / 智谱 GLM / 本地 Ollama / 自定义），
+  自动填充 Base URL 与模型名；
+- 输入 API Key（`type=password`，可点「显示 / 隐藏」切换）；
+- **测试连接**：用当前表单真实调用一次模型，显示模型名与延迟；
+- **保存并使用**：只保存到 `web.py` 进程内存，不写入 `.env`、不写入浏览器
+  localStorage/sessionStorage；保存后页面只显示 `sk-****abcd` 这类掩码；
+- **清除运行时配置**：回到启动时 `.env` 的配置。
+
+![模型设置面板](docs/web-ui-settings.png)
+
+> 安全边界：Key 只存在本机后端进程内存，服务重启即失效；接口只监听 `127.0.0.1`，
+> 没有鉴权，不要暴露到公网。`.env` 中的 Key 仍会被读取，请确保 `.env` 不被提交（已在 `.gitignore`）。
+
+![深色主题网页版](docs/web-ui-dark.png)
 
 会话按 `thread_id` 存在 `InMemorySaver` 中，进程重启后未完成会话会丢失；默认只监听
 `127.0.0.1`，没有鉴权，不要直接暴露到公网。
@@ -424,6 +461,8 @@ pytest -q
 - 重试：第 3 次成功（`attempts=3`，退避 `[0.5, 1.0]`）；3 次全失败返回结构化错误；
 - 写操作门禁：未确认直接拒绝、参数里伪造 `human_approved` 无效、确认后才产生 dry-run 文件；
 - 网页版：首页可访问、API 三次中断顺序正确、每次确认前 `outbox` 为空；
+- 模型设置：Key 保存后不落盘、不回传明文、只显示掩码；测试连接失败不泄露 Key；
+  清除运行时配置后回到 `.env` / 离线模式；设置面板与深色主题存在于 `index.html`；
 - 证据完整性：编造 URL/改写引文被过滤、报告 URL 白名单清洗；无来源时报告显式声明；
 - 报告模板：摘要 2~3 句、关键发现逐条带 `[S#]`、同义证据合并、固定三段式结构、来源清单按证据编号重建；
 - 安全：内网 IP、解析到内网的域名、非 http(s) URL 一律拒绝抓取；
@@ -431,7 +470,11 @@ pytest -q
 - 抓取清洗：广告 / 导航 / Cookie / 脚本被删除，重复段落只保留一次；
 - 可观测：`finalize` 的 token 增量、成本公式、耗时、JSONL 日志字段完整；
 - 失败降级：模型报错时证据提取/报告生成回退到启发式，规划失败时降级为单查询；
-- 修改/终止分支、拒绝写操作分支、搜索全失败降级。
+- 修改/终止分支、拒绝写操作分支、搜索全失败降级；
+- **P0 质量闭环**：子问题覆盖度只把“命中主题实体与语义块”算覆盖；缺口补检受最大轮次约束；
+  claim→quote 校验会丢弃明显无关的“证据”，但保留同义改写；图级测试验证补检轮会合并新页面。
+
+当前：**113 passed**。
 
 ## 10. 验收对照
 
@@ -445,6 +488,8 @@ pytest -q
 | 日志按 step_id 串起链路         | `logging_utils.py` + JSONL + 日志表                                                        |
 | 结论带可验证引用              | 报告用 `[S#]` 角标；`_sanitize_report()` 按证据重建来源清单并清洗未抓取 URL                        |
 | 问题拆解 3~5 个子问题           | `plan_research` → `plan.sub_questions`；日志 S002 记录子问题数                                      |
+| 子问题覆盖 / 缺口补检（P0）       | `check_coverage` + `quality.compute_coverage`；覆盖率/轮次写入 `final_output`                     |
+| claim 支持性校验（P0）         | `quality.verify_evidence`；支持率写入 `final_output.verification`                              |
 | 可观测（token/成本/耗时）        | `final_output` 含 `token_usage / cost_cny / duration_ms / log_summary`                       |
 | 40 题评测 + 报告             | `evaluation/`：`run_eval.py` + `make_report.py` → `evaluation/eval_report.md`               |
 | 9 项功能闭环验收             | `evaluation/acceptance_check.py` → [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) |
@@ -457,6 +502,11 @@ pytest -q
 - 搜索按 Bing / 360 / DuckDuckGo / Wikipedia 回退，可能被限流或区域不可达；已做提供方回退与重试。
 - 编码探测是启发式的：极短页面、或正文本身在源头就是乱码（例如被上游转码坏掉的镜像站）无法还原，
   这类页面会被整段丢弃或抓取失败，而不是“猜”出正常内容。
+- P0 的「子问题覆盖率」是代理指标：真实评测 51.2%，主要卡在对比题只抓到一方、站点 403/JS 空页；
+  补检只能缓解，不能替代“按实体拆分检索 / 官方搜索 API / PDF 解析”。
+- P0 的「证据断言支持率」是规则版校验（bigram、数字、英文实体、否定词一致性），
+  不是语义蕴含判断；只用于拦截明显外推，不能替代人工抽检。
+- 补检轮会提高延迟：真实评测平均 15.6s、P95 26.7s（平均 1.68 轮）；下一步用并发抓取与缓存控制。
 - 只面向“研究问题 → 带来源报告 → 交付”这一条窄链路，不做通用工具编排。
 
 ## 12. 评测（40 题测试集）
@@ -468,10 +518,12 @@ pytest -q
 ```bash
 # 本地确定性 fixture：验证流水线、引用、去重、延迟（快）
 python evaluation/run_eval.py --mode mock --tag mock_current
+python evaluation/run_eval.py --mode mock --tag mock_p0
 # 消融基线：关闭本轮新增的引用可点击化与问题拆解
 python evaluation/run_eval.py --mode mock --tag mock_baseline --no-link-citations --no-sub-questions
 # 真实联网：检索质量、成功率与延迟（慢，受网络影响）
 python evaluation/run_eval.py --mode real --tag real_current
+python evaluation/run_eval.py --mode real --tag real_p0
 # 真实联网 + 真实大模型（读取 .env；先跑 check_llm.py）
 python evaluation/run_eval.py --mode real --llm openai --tag real_llm --limit 10
 python evaluation/make_report.py
@@ -480,9 +532,12 @@ python evaluation/acceptance_check.py
 ```
 
 指标口径：任务成功率、引用可追溯率、关键结论可点击来源率、工具调用正确率、预期要点覆盖率、
-证据逐字可回溯率、平均/P95 延迟、单任务成本、来源去重率、子问题拆解达标率。
+证据逐字可回溯率、平均/P95 延迟、单任务成本、来源去重率、子问题拆解达标率；
+P0 追加：子问题证据覆盖率、证据断言支持率、平均检索轮次。
 没有 `OPENAI_API_KEY` 时 LLM 走离线启发式，token/成本为 0，报告中会明确标注这一口径。
 
-最近一次真实联网评测（40 题，`real_after_360`）：任务成功率 **82.5%**、引用可追溯/可点击 **100%**、
-工具调用正确率 **87.5%**、P95 **19.8s**；示例题「2025 年 AI Agent 在企业落地的主要挑战是什么？」
-已能完整跑到带来源报告（此前 Bing 返回统计公报导致无证据，已通过新增 360 搜索源修复）。
+最近一次真实联网评测（40 题，`real_p0`，离线 LLM + 真实检索）：任务成功率 **85.0%**、
+引用可追溯/可点击 **100%**、工具调用正确率 **90.0%**、多跳类 **70.0%**、
+子问题覆盖率 **51.2%**、断言支持率 **99.4%**、平均 **1.68 轮**、P95 **26.7s**。
+相比 `real_after_360`：成功率 +2.5pp、多跳 +10pp、事实覆盖 +5pp；覆盖率仍未达到 75% 目标，
+主要受“对比题只抓到一方 / 站点 403/JS 空页”限制，见 [OPTIMIZATION.md](OPTIMIZATION.md) 第 9 节。

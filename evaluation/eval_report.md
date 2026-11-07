@@ -30,17 +30,20 @@
 
 | 指标 | 结果 | 目标 | 是否达标 |
 | --- | --- | --- | --- |
-| 任务成功率 | 82.5% | ≥ 80% | ✅ |
+| 任务成功率 | 85.0% | ≥ 80% | ✅ |
 | 引用可追溯率 | 100.0% | ≥ 90% | ✅ |
 | 关键结论可点击来源率 | 100.0% | = 100% | ✅ |
-| 工具调用正确率 | 87.5% | ≥ 85% | ✅ |
-| 预期要点覆盖率（自动代理） | 21.2% | ≥ 85%（参考） | ❌ |
-| P95 延迟 | 19802 ms | ≤ 30000 ms | ✅ |
-| 平均延迟 | 9821 ms | - | - |
+| 工具调用正确率 | 90.0% | ≥ 85% | ✅ |
+| 预期要点覆盖率（自动代理） | 26.2% | ≥ 85%（参考） | ❌ |
+| P95 延迟 | 26741 ms | ≤ 30000 ms | ✅ |
+| 平均延迟 | 15623 ms | - | - |
 | 单任务平均成本 | ¥0.0 | ≤ ¥0.5 | ✅ |
 | 平均 token | 0.0 | - | - |
-| 来源去重率 | 18.0% | 去重有效（>0 表示有重复被合并） | - |
+| 来源去重率 | 26.8% | 去重有效（>0 表示有重复被合并） | - |
 | 子问题拆解达标率 | 100.0% | 3~5 个/题 | - |
+| 子问题证据覆盖率（P0） | 51.2% | ≥ 75% | ❌ |
+| 证据断言支持率（P0） | 99.4% | ≥ 75% | ✅ |
+| 平均检索轮次（P0） | 1.68 | - | - |
 | 人工确认平均次数 | 3.0 | 3 次/题 | - |
 
 | 预期要点覆盖（精确命中，参考） | 0.0% | - | - |
@@ -53,9 +56,9 @@
 | 简单事实 | 10 | 100.0% | 100.0% |
 | 对比分析 | 10 | 70.0% | 100.0% |
 | 时效性 | 10 | 100.0% | 100.0% |
-| 多跳推理 | 10 | 60.0% | 100.0% |
+| 多跳推理 | 10 | 70.0% | 100.0% |
 
-共 40 题，成功 33 题；来源去重率 18.0%，平均子问题 4.0 个。
+共 40 题，成功 34 题；来源去重率 26.8%，平均子问题 4.0 个。
 
 ## 4. 流水线机制评测（mock fixture，不计真实检索质量）
 
@@ -66,12 +69,15 @@
 | 关键结论可点击来源率 | 100.0% | = 100% | ✅ |
 | 工具调用正确率 | 100.0% | ≥ 85% | ✅ |
 | 预期要点覆盖率（自动代理） | 100.0% | ≥ 85%（参考） | ✅ |
-| P95 延迟 | 22 ms | ≤ 30000 ms | ✅ |
-| 平均延迟 | 20 ms | - | - |
+| P95 延迟 | 25 ms | ≤ 30000 ms | ✅ |
+| 平均延迟 | 21 ms | - | - |
 | 单任务平均成本 | ¥0.0 | ≤ ¥0.5 | ✅ |
 | 平均 token | 0.0 | - | - |
-| 来源去重率 | 50.4% | 去重有效（>0 表示有重复被合并） | - |
+| 来源去重率 | 54.0% | 去重有效（>0 表示有重复被合并） | - |
 | 子问题拆解达标率 | 100.0% | 3~5 个/题 | - |
+| 子问题证据覆盖率（P0） | 90.0% | ≥ 75% | ✅ |
+| 证据断言支持率（P0） | 100.0% | ≥ 75% | ✅ |
+| 平均检索轮次（P0） | 1.15 | - | - |
 | 人工确认平均次数 | 3.0 | 3 次/题 | - |
 
 mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：搜索→抓取→证据→报告→引用→人工确认全链路、引用可点击、去重与延迟。共 40 题，失败 0 题。
@@ -87,26 +93,39 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 | 关键结论可点击来源率 | 0.0% | 100.0% | +100.0 pp |
 | 工具调用正确率 | 0.0% | 100.0% | +100.0 pp |
 | 子问题拆解达标率 | 0.0% | 100.0% | +100.0 pp |
-| 平均延迟(ms) | 20 ms | 20 ms | +0 ms |
+| 平均延迟(ms) | 20 ms | 21 ms | +1 ms |
 
 基线通过 `AGENT_LINK_CITATIONS=0 AGENT_PLAN_SUB_QUESTIONS=0` 关闭本轮新增能力，用于证明「引用可点击化」和「3~5 个子问题拆解」确实生效，而不是靠提示词自述。
 
-### 5.2 真实联网优化（证据噪声过滤 / 抓取候选扩容）
+### 5.2 真实联网优化（P0 前后对比）
 
-| 指标 | 优化前（real_current） | 优化后（real_after_360） | 变化 |
+| 指标 | 优化前（real_current） | 优化后（real_p0） | 变化 |
 | --- | --- | --- | --- |
-| 任务成功率 | 77.5% | 82.5% | +5.0 pp |
+| 任务成功率 | 77.5% | 85.0% | +7.5 pp |
 | 引用可追溯率 | 93.0% | 100.0% | +7.0 pp |
 | 关键结论可点击来源率 | 93.0% | 100.0% | +7.0 pp |
-| 工具调用正确率 | 92.5% | 87.5% | -5.0 pp |
-| 预期要点覆盖（宽松代理） | 0.0% | 21.2% | +21.2 pp |
-| 平均延迟(ms) | 9289 | 9821 | +532 ms |
-| P95 延迟(ms) | 29602 | 19802 | -9800 ms |
-| 失败题数 | 9 | 7 | -2 |
+| 工具调用正确率 | 92.5% | 90.0% | -2.5 pp |
+| 预期要点覆盖（宽松代理） | 0.0% | 26.2% | +26.2 pp |
+| 平均延迟(ms) | 9289 | 15623 | +6334 ms |
+| P95 延迟(ms) | 29602 | 26741 | -2861 ms |
+| 失败题数 | 9 | 6 | -3 |
 
-优化内容：① 中文宽泛问题新增 360 搜索源（`so360`，结果 URL 取自 `data-mdurl`，绕过跳转）；② 证据抽取增加导航/表格/菜单噪声过滤（`_looks_like_noise`）；③ 检索每查询返回数 5→8、抓取最多尝试 URL 5→8，提高绕过 403/JS 空页面的概率。
+优化内容：① 中文宽泛问题新增 360 搜索源（`so360`，结果 URL 取自 `data-mdurl`，绕过跳转）；② 证据抽取增加导航/表格/菜单噪声过滤（`_looks_like_noise`）；③ 检索每查询返回数 5→8、抓取最多尝试 URL 5→8；④ P0：子问题覆盖检查 + 缺口补检（最多 2 轮）；⑤ P0：抓取页数按对比/多跳自适应、候选重排、正文内容指纹去重；⑥ P0：证据进入报告前做 claim→quote 支持性校验。
 
-**读法说明**：真实联网评测受搜索引擎返回质量与站点 403/超时的波动影响，单次 ±1~2 题属于网络噪声；引用类指标的提升有一部分来自将无证据题从分母中剔除。证据相关性请以第 8 节人工抽样为准，而不是只看成功率。
+**读法说明**：真实联网评测受搜索引擎返回质量与站点 403/超时的波动影响，单次 ±1~2 题属于网络噪声；引用类指标的提升有一部分来自将无证据题从分母中剔除。补检轮会提高延迟（平均轮次见 5.3），证据相关性请以第 8 节人工抽样与第 3 节自动断言支持率为准，而不是只看成功率。
+
+### 5.3 研究质量闭环（P0：子问题覆盖 + 断言校验）
+
+| 指标 | 优化前（real_current） | 优化后（real_p0） | 说明 |
+| --- | --- | --- | --- |
+| 子问题证据覆盖率 | - | 51.2% | 新增 |
+| 证据断言支持率 | - | 99.4% | 新增 |
+| 平均检索轮次 | - | 1.68 | 1.0（仅首轮） |
+| 任务成功率 | 77.5% | 85.0% | real_current |
+| 预期要点覆盖（宽松代理） | 0.0% | 26.2% | real_current |
+| 平均延迟(ms) | 9289 | 15623 | real_current |
+
+P0 改动：① `check_coverage` 节点按子问题计算证据覆盖度，未达标时用缺口生成补检 query（默认最多 2 轮）；② 抓取页数按对比/多跳自适应，候选按问题词与官方站点先验重排，正文按内容指纹去重；③ 证据进入报告前做 claim→quote 支持性校验，明显外推/无关的结论会被过滤并记录。
 
 ## 6. 示例题：Q21 预期 vs 实际
 
@@ -115,14 +134,14 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 | 验收项 | 预期 | 实际 | 结果 |
 | --- | --- | --- | --- |
 | 问题拆解 | 3~5 个子问题 | 4 个 | ✅ |
-| 联网搜索 | 至少 1 次成功检索 | search ok=2 次 | ✅ |
-| 网页抓取 | 至少 1 篇正文 | fetch ok=1 次，来源 1 个 | ✅ |
-| 证据整理 | 证据含来源/摘要/可信度 | 2 条证据 | ✅ |
-| 报告生成 | 结构化 Markdown | 1243 字符 | ✅ |
-| 引用校验 | 关键结论可追溯 | 可追溯 2/2 | ✅ |
-| 可点击来源 | 每条结论至少 1 个链接 | 可点击 2/2 | ✅ |
+| 联网搜索 | 至少 1 次成功检索 | search ok=4 次 | ✅ |
+| 网页抓取 | 至少 1 篇正文 | fetch ok=4 次，来源 4 个 | ✅ |
+| 证据整理 | 证据含来源/摘要/可信度 | 12 条证据 | ✅ |
+| 报告生成 | 结构化 Markdown | 3162 字符 | ✅ |
+| 引用校验 | 关键结论可追溯 | 可追溯 12/12 | ✅ |
+| 可点击来源 | 每条结论至少 1 个链接 | 可点击 12/12 | ✅ |
 | 人工确认 | 3 次暂停并可继续 | 3 次 | ✅ |
-| 可观测 | trace/日志/token/耗时 | 5423 ms，token=0 | ✅ |
+| 可观测 | trace/日志/token/耗时 | 12879 ms，token=0 | ✅ |
 | 任务闭环 | 有证据且完成 | status=completed | ✅ |
 | 失败原因可见 | 不静默卡死 | 无 | ✅ |
 
@@ -148,23 +167,24 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 | --- | --- | --- |
 | 对此，风投 公司Dragonfly合伙人Haseeb Qureshi近期就评论表示，当前席卷业界的「AI Agents」热潮或许能延续到2025年，但最终将难以 | https://www.jb51.net/blockchain/968771.html | 0.51 |
 | 对于AI Agent，《经济学人》引述AI数据公司Scale的Alex Wang表示：从聊天行动阶段突破，可能成为2025年科技界最为重要的成就之一，这种预期已 | https://www.jb51.net/blockchain/968771.html | 0.51 |
+| 不过观察当前币圈的一众AI Agent，与OpenAI和Google的AI Agent不同，大多都还套着 Meme 币的外壳，机械地推送消息，仅有少部分AI A | https://www.jb51.net/blockchain/968771.html | 0.51 |
 
 ## 7. 失败案例
 
 | 题目 | 类别 | 状态 | 失败原因 | 证据数 |
 | --- | --- | --- | --- | --- |
-| Q12 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521 | 0 |
-| Q13 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：HTTP 403（页面不可用）；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
-| Q20 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：SSL 证书校验失败：HTTPSConnectionPool(host='blog.csdn.net', port=443): Max retries exceeded with url: /mobangde/article/detail | 0 |
-| Q33 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：SSL 证书校验失败：HTTPSConnectionPool(host='blog.csdn.net', port=443): Max retries exceeded with url: /2501_91474102/article/d | 0 |
-| Q34 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：SSL 证书校验失败：HTTPSConnectionPool(host='blog.csdn.net', port=443): Max retries exceeded with url: /gitblog_00330/article/d | 0 |
-| Q35 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：SSL 证书校验失败：HTTPSConnectionPool(host='blog.csdn.net', port=443): Max retries exceeded with url: /weixin_32830601/article | 0 |
-| Q37 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：SSL 证书校验失败：HTTPSConnectionPool(host='blog.csdn.net', port=443): Max retries exceeded with url: /weixin_42526087/article | 0 |
+| Q12 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
+| Q13 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别）；[summarize_sources] 离线启发式证据提取：逐句摘录原文，未做改写；未找到可靠来源 | 0 |
+| Q20 | comparison | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
+| Q33 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
+| Q34 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] fetch_page 重试 3 次后仍失败：HTTP 521；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
+| Q37 | multi_hop | completed_no_sources | 无可用证据（检索/抓取/证据提取失败）；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别）；[fetch_pages] 不可重试失败：正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别） | 0 |
 
 ## 8. 人工抽样核对（关键结论）
 
 - 抽样方式：从真实联网评测的 40 题结果中随机抽 12 条「关键发现」，回看其结论是否为完整句子、是否真的回答该题、是否来自该来源；
 - 判定结果：支持 5/12，准确率 41.7%；
+- 说明：以上抽样来自 `real_after_360`（P0 之前）；`real_p0` 的「证据断言支持率」是自动代理指标，尚未重新人工抽样，两者口径不同。
 
 | 题目 | 关键结论（截断） | 来源 | 判定 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -191,6 +211,8 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 | 证据表（来源/摘要/可信度） | `state.evidence` + `final_output.evidence`，字段含 `source_url/source_snippet/confidence` | ✅ |
 | 结构化 Markdown 报告 | `DRAFT_SYSTEM` 固定摘要/关键发现/局限与未证实三段式 | ✅ |
 | 引用校验 | `filter_evidence` 逐字校验 + `_sanitize_report` URL 白名单 + `[S#]` 链接化 | ✅ |
+| 子问题覆盖 / 缺口补检（P0） | `check_coverage` + `quality.compute_coverage`；覆盖率与轮次见第 3 节 | ✅ |
+| claim 支持性校验（P0） | `quality.verify_evidence`；自动支持率见第 3 节 | ✅ |
 | 人工确认可暂停/修改/继续 | 3 处 `interrupt()`；pytest 覆盖通过/修改/终止分支 | ✅ |
 | 失败重试与降级 | 工具重试 3 次 + 指数退避 + 熔断；失败案例见第 7 节 | ✅ |
 | 可观测（trace/日志/token/耗时） | `final_output` 含 `trace_id/log_summary/token_usage/cost_cny/duration_ms`；JSONL 日志 | ✅ |
@@ -199,6 +221,9 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 
 - 本次环境没有 `OPENAI_API_KEY`，LLM 走离线启发式：**token/成本真实数据为 0**，P95 延迟也不包含模型推理时间；接入真实模型后需要重跑本评测才能给出真实成本与延迟。
 - 真实联网评测的检索质量受搜索引擎可用性影响（部分站点 403 / 区域不可达 / PDF 链接），失败案例见第 7 节。
+- P0 的「子问题覆盖率」目前 51.2%，低于 75% 目标：主要卡在对比题只抓到一方、部分站点 403/JS 空页；下一步应按实体分别检索、扩展官方搜索 API / PDF 解析。
+- P0 的「证据断言支持率」是规则版代理（bigram / 数字 / 实体 / 否定词一致性），不是语义蕴含判断；它只用于拦截明显外推，最终仍需人工抽检。
+- 补检轮会提高延迟（real_p0 平均 15.6s、P95 26.7s，平均 1.68 轮）；后续需要并发抓取、缓存与按轮次收紧预算来控制 P95。
 - 事实准确率：宽松代理（预期要点 bigram 覆盖）与人工抽样（第 8 节）只是近似，不能替代独立标注；上线前建议扩展到 100+ 题并双人标注。
 - mock fixture 只验证流水线机制，不代表真实检索效果；勿把 mock 的高分当作产品指标。
 
@@ -206,9 +231,11 @@ mock 模式用 `evaluation/mock_web.py` 生成确定性网页，主要验证：�
 
 ```bash
 python evaluation/run_eval.py --mode mock --tag mock_current
+python evaluation/run_eval.py --mode mock --tag mock_p0
 python evaluation/run_eval.py --mode mock --tag q21_mock --ids Q21
 python evaluation/run_eval.py --mode mock --tag mock_baseline --no-link-citations --no-sub-questions
 python evaluation/run_eval.py --mode real --tag real_current
 python evaluation/run_eval.py --mode real --tag real_after_360
+python evaluation/run_eval.py --mode real --tag real_p0
 python evaluation/make_report.py
 ```
