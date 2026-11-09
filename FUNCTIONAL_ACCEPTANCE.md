@@ -10,20 +10,20 @@
 | 2 | ② 联网搜索拿到候选来源 | ✅ 通过 | search_web 成功 2 次，候选 3 条（去重后 URL 3 个） |
 | 3 | ③ 网页抓取：正文 / 去广告 / 去重 | ✅ 通过 | 抓取成功 2 页；广告/导航/脚本已移除，重复段落已合并，正文 140 字符；来源 URL 唯一=True；搜索候选 URL 唯一=True |
 | 4 | ④ 证据表（来源 / 摘要 / 可信度） | ✅ 通过 | 2 条证据，字段齐全；证据表已渲染（见 CLI 最终输出 / final_output.evidence） |
-| 5 | ⑤ 结构化 Markdown 报告 | ✅ 通过 | 报告 791 字符，包含摘要/关键发现/局限与未证实 |
+| 5 | ⑤ 结构化 Markdown 报告 | ✅ 通过 | 报告 795 字符，包含摘要/关键发现/局限与未证实 |
 | 6 | ⑥ 引用校验：关键结论对应可点击来源 | ✅ 通过 | 关键发现 2 条，可追溯 2 条，可点击 2 条，链接均来自抓取来源 |
 | 7 | ⑦ 人工确认：暂停 / 修改 / 继续 + 写操作门禁 | ✅ 通过 | 3 次暂停=['draft_review', 'email_confirmation', 'notion_confirmation']；确认前 outbox 为空=True；写操作 2 个且成功=True；修改分支重生成 1 次并继续完成=True；写操作产物 2 个 |
 | 8 | ⑧ 失败处理：重试 + 降级 | ✅ 通过 | 可重试失败第 3 次成功（attempts=3）；404 不重试（attempts=1）；模型报错降级为模板（mode=offline_fallback） |
-| 9 | ⑨ 可观测：trace / 日志 / token / 成本 / 耗时 | ✅ 通过 | trace_id=accept-approve-a2c412；日志 19 条且字段齐全=True；JSONL=True；token=0；成本=¥0.0；耗时=82ms；成本口径校验=True |
+| 9 | ⑨ 可观测：trace / 日志 / token / 成本 / 耗时 | ✅ 通过 | trace_id=accept-approve-d3cb9a；日志 21 条且字段齐全=True；JSONL=True；token=0；成本=¥0.0；耗时=65ms；成本口径校验=True |
 
 ## 验收运行证据
 
 - 研究问题：LangGraph 的 interrupt 函数有什么作用？
-- trace_id：accept-approve-a2c412
-- 日志条数：19；JSONL：`D:\Build\AI-hy\evaluation\results\acceptance\approve\logs\research-accept-approve-a2c412.jsonl`
+- trace_id：accept-approve-d3cb9a
+- 日志条数：21；JSONL：`D:\Build\AI-hy\evaluation\results\acceptance\approve\logs\research-accept-approve-d3cb9a.jsonl`
 - 子问题：4 个
 - 证据：2 条；来源：2 个
-- token：0；成本：¥0.0；耗时：82 ms
+- token：0；成本：¥0.0；耗时：65 ms
 - 写操作：2 个成功（dry-run）
 
 ## 复现

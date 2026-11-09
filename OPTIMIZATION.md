@@ -307,3 +307,38 @@
   超过 1 万 chunk 再换。
 - **索引缓存**：`data/kb_index.json` 记录 mtime/size 与模型名，文档变更自动重建。
 
+## 13. 实施记录（报告质量闭环：证据卡片 → 大纲 → 分节写作 → 引用校验，2026-11-09）
+
+针对实测的四个问题：**摘要太水 / 逻辑割裂 / 引用堆叠错误 / 缺乏推演**，把报告生成从“一次调用”
+拆成四层（新增 `reporting.py`，图从 12 节点变 14 节点）。
+
+| 能力 | 实现 | 对应的病 |
+| --- | --- | --- |
+| 证据卡片化 | `summarize_sources` → `reporting.enrich_evidence`：`sub_question` / `kind`（定义/机制/数据/案例/观点）/ `promo`（营销标记）/ 同义合并（`merged_count`、`merged_urls`） | 引用堆叠：同页同义证据不再反复出现 |
+| 大纲规划 | 新增 `plan_outline`：LLM 输出 `{sections:[{title,goal,evidence_ids}]}`；失败/离线回落规则大纲；`uncovered` 只保留真没证据的子问题 | 逻辑割裂：一节只写一个子问题 |
+| 分节写作 | `draft_report` 按节调用（每节只喂本节证据，编号仍全局 `[S#]`）；摘要独立提示词「结论→依据→边界」；「关键发现」程序生成；「分析与推演」每条【推断】 | 摘要太水 / 缺乏推演 |
+| 引用硬校验 | 新增 `draft_review`：编号越界、单句 >2 角标、引用与句子无词面关联、关键发现无引用、摘要空判断、小节缺失；不达标让模型最小改动重写一次（**问题更多就丢弃**），再程序剪枝/补节 | 引用堆叠错误 + 防止改坏 |
+
+结果写入 `final_output.outline` 与 `final_output.draft_review`（`status / issues / rewrites /
+rejected_rewrites / checks.remaining_issues`）；消融开关 `AGENT_EVIDENCE_CARDS`、`AGENT_DRAFT_REVIEW`。
+
+**实施过程中被真实运行打出来的 5 个坑（都已修 + 有测试）**：
+
+1. 首版让模型“修引用”，它直接把角标删光、把小节重排 → 校验增加 `no_citations` / `findings_not_bulleted`，
+   并且**重写后问题数不下降就丢弃**，保留原稿走程序修复；
+2. 程序修复按“行”重排角标，把一句话的引用挪到行尾 → 改成**逐句**修复，角标放回句末标点之前；
+3. 规则大纲只有“摘要/内容节/推演/局限”，没有「关键发现」→ `find_bullets()` 按证据程序生成，
+   条条带引用、不会被模型写成大段散文；
+4. 知识库把本项目自己的 RAG 设计文档塞进“LangGraph vs AutoGen”报告 → `retrieve_knowledge`
+   增加问题词面相关性门槛，日志记录过滤条数；
+5. 覆盖率是词面代理，会出现“写了整节 yet 局限里说未覆盖” → `uncovered` 先按证据归属与大纲小节过滤；
+6. 大纲 JSON 偶发非法 → `chat_json` 用 `response_format=json_object`（网关不支持自动重试），
+   仅对 JSON 解析错误重试，超时不重试。
+
+**实测（glm-4-flash + 真实联网，对比题）**：大纲 6 节（LLM）、草稿 4.6k 字符、`draft_review`
+剩余问题 0（状态 passed）；摘要从“存在差异”式空判断变成“LangGraph 用 interrupt 在节点内部暂停，
+AutoGen 靠检查点回放状态”；「分析与推演」每条带【推断】与前提/推翻条件；局限不再与正文自相矛盾。
+代价：单题耗时从 ~140s 升到 ~260s（分节写作 5~6 次调用 + 一次重写预算）。
+
+**遗留**：证据仍是摘录式时，关键发现会出现英文原句（摘要/推演已是中文）；引用校验只能查格式与词面
+相关，查不出“结论对但因果写错”；重写失败时保留已知问题（写入 `draft_review`，不阻塞流程）。

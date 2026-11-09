@@ -774,6 +774,27 @@
     ok: "ok", degraded: "degraded", error: "error", rejected: "rejected",
     skipped: "skipped", approved: "approved", revise: "approved", terminated: "error",
   };
+  // 节点中文名：日志/进度里直接显示，避免用户看到 receive_question 这种内部标识
+  const NODE_LABELS = {
+    receive_question: "接收问题",
+    plan_research: "拆解问题与检索词",
+    search_web: "联网搜索",
+    fetch_pages: "抓取与清洗网页",
+    retrieve_knowledge: "知识库检索",
+    summarize_sources: "证据抽取与卡片化",
+    check_coverage: "覆盖度检查",
+    plan_outline: "生成报告大纲",
+    draft_report: "撰写报告",
+    draft_review: "引用与结构校验",
+    human_review_draft: "草稿人工审核",
+    human_confirm_actions: "写操作确认",
+    execute_actions: "执行写操作",
+    finalize: "汇总结果",
+  };
+
+  function nodeLabel(name) {
+    return NODE_LABELS[name] || name || "";
+  }
 
   function escapeHtml(text) {
     return String(text == null ? "" : text).replace(/[&<>"']/g, (c) => ({
@@ -880,7 +901,7 @@
       return (
         '<tr title="' + escapeHtml(detail) + '">' +
         '<td class="mono">' + escapeHtml(entry.step_id) + "</td>" +
-        "<td>" + escapeHtml(entry.node_name) + "</td>" +
+        '<td title="' + escapeHtml(entry.node_name) + '">' + escapeHtml(nodeLabel(entry.node_name)) + "</td>" +
         "<td>" + escapeHtml(entry.tool_name || "-") + "</td>" +
         "<td>" + statusChip(entry.status) + "</td>" +
         '<td class="mono">' + escapeHtml(entry.retry_count) + "</td>" +
@@ -915,7 +936,7 @@
         if (latestLogs.length) {
           const last = latestLogs[latestLogs.length - 1];
           $("progress-text").textContent =
-            "已完成 " + latestLogs.length + " 步 · 最近：" + last.node_name +
+            "已完成 " + latestLogs.length + " 步 · 最近：" + nodeLabel(last.node_name) +
             "（" + last.status + "） · " + seconds + "s";
         } else {
           $("progress-text").textContent = (label || "处理中…") + " " + seconds + "s";
@@ -987,7 +1008,7 @@
     const logs = data.logs || [];
     if (logs.length) {
       const last = logs[logs.length - 1];
-      $("progress-text").textContent = "已完成 " + logs.length + " 步 · 最近：" + last.node_name + "（" + last.status + "）";
+      $("progress-text").textContent = "已完成 " + logs.length + " 步 · 最近：" + nodeLabel(last.node_name) + "（" + last.status + "）";
     }
   }
 
@@ -1090,7 +1111,7 @@
         const tokens = Number(span.total_tokens) || 0;
         const cost = Number(span.cost_cny) || 0;
         return '<div class="trace-row">' +
-          '<span class="trace-node mono" title="' + escapeHtml(span.node) + '">' + escapeHtml(span.node) + '</span>' +
+          '<span class="trace-node mono" title="' + escapeHtml(span.node) + '">' + escapeHtml(nodeLabel(span.node)) + '</span>' +
           '<span class="trace-bar-wrap"><span class="trace-bar ' + (span.status === "ok" ? "" : "bad") +
             '" style="width:' + pct + '%"></span></span>' +
           '<span class="trace-ms mono">' + ms + ' ms</span>' +

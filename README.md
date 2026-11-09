@@ -19,13 +19,15 @@ flowchart TD
     B --> C[search_web 工具]
     C --> D[fetch_pages 工具]
     D --> K[retrieve_knowledge<br/>知识库 BM25 + 向量 RRF]
-    K --> E[summarize_sources 工具<br/>网页证据 + 知识库证据]
+    K --> E[summarize_sources 工具<br/>网页证据 + 知识库证据 + 证据卡片化]
     E --> Q{check_coverage<br/>子问题覆盖度}
     Q -- 覆盖不足 --> C
-    Q -- 覆盖达标 --> F[draft_report]
-    F --> G{human_review_draft<br/>interrupt ① 草稿}
+    Q -- 覆盖达标 --> O[plan_outline<br/>按子问题分节 + 分配证据]
+    O --> F[draft_report<br/>分节写作 + 摘要三段式 + 推演]
+    F --> R[draft_review<br/>引用/结构硬校验]
+    R --> G{human_review_draft<br/>interrupt ① 草稿}
     G -- 通过 --> H{human_confirm_actions<br/>interrupt ② 发邮件前<br/>interrupt ③ 存 Notion 前}
-    G -- 修改意见 --> F
+    G -- 修改意见 --> O
     G -- 终止 --> J[finalize]
     H --> I[execute_actions<br/>human_approved=True]
     I --> J
@@ -34,6 +36,10 @@ flowchart TD
 - **研究质量闭环（P0）**：`check_coverage` 会按 3~5 个子问题计算证据覆盖度；低于阈值时
   用缺口生成补检 query，最多再检索一轮（默认总轮次 2）；`summarize_sources` 进入报告前还会做
   claim→quote 支持性校验，明显外推/无关的“证据”会被过滤并记录。
+- **报告质量闭环**：证据先卡片化（归属子问题 / 类型 / 去重 / 营销标记），`plan_outline` 按子问题
+  排大纲并显式分配 `[S#]`，`draft_report` 逐节写作（摘要固定「结论 → 依据 → 边界」三段式，
+  「分析与推演」每条带【推断】），`draft_review` 对引用编号、单句角标数、引用相关性、小节完整性
+  做硬校验：不达标先让模型最小改动重写一次（**重写后问题更多就丢弃**），再程序剪枝/补节兜底。
 - **三处 `interrupt()`**：草稿审核、发邮件前、存 Notion 前。后两处都在 `human_confirm_actions`
   节点内顺序执行，各自产生一次独立的暂停/恢复，因此邮件与 Notion 可以分别同意或拒绝。
 - 图编译时挂 **SQLite checkpointer**（`persistence.build_checkpointer()`，库文件 `data/checkpoints.sqlite`），
@@ -56,9 +62,10 @@ flowchart TD
 
 ```
 .
-├── graph.py             # LangGraph 图：12 个节点 + 条件边 + interrupt + checkpointer
+├── graph.py             # LangGraph 图：14 个节点 + 条件边 + interrupt + checkpointer
 ├── state.py             # ResearchState TypedDict + 初始状态
 ├── quality.py           # P0 质量闭环：子问题覆盖度 + claim→quote 支持性校验
+├── reporting.py         # 报告质量：证据卡片化 + 大纲 + 引用硬校验/程序修复
 ├── rag.py               # P0-3 RAG：分块 + BM25 + 可选向量 + RRF 融合 + 索引缓存
 ├── tracing.py           # P0-2 可观测性：节点 Span + 模型价目表成本归因
 ├── tools.py             # 5 个工具、JSON Schema、重试装饰逻辑、写操作门禁
@@ -163,6 +170,11 @@ cp .env.example .env        # Windows: copy .env.example .env
 | `AGENT_KB_TOP_K` | 每次检索返回的片段数，默认 6 |
 | `AGENT_KB_CHUNK_SIZE` / `AGENT_KB_OVERLAP` | 分块大小 / 重叠字符数，默认 800 / 120 |
 | `AGENT_EMBEDDING_MODEL` | embedding 模型名，默认 `text-embedding-3-small`；智谱用 `embedding-3`；失败自动降级 BM25 |
+| `AGENT_EVIDENCE_CARDS` | `1`（默认）把证据升级成卡片（归属子问题/类型/去重/营销标记）；`0` 用于消融 |
+| `AGENT_EVIDENCE_CARDS_MAX` | 证据卡片上限，默认 20 |
+| `AGENT_DRAFT_SECTIONS_MAX` | 报告按几个子问题分节（不含摘要/推演/局限），默认 3 |
+| `AGENT_DRAFT_REVIEW` | `1`（默认）做引用/结构硬校验并重写；`0` 只记录指标不重写 |
+| `AGENT_DRAFT_MAX_REWRITE` | 校验不通过时最多重写几次，默认 1（重写效果更差会被丢弃） |
 
 密钥来源优先级：**网页「模型设置」保存的运行时配置**（仅进程内存，重启失效）→ `.env` → 离线模式；
 代码里没有硬编码 Key。运行时配置不会写回 `.env`。
@@ -519,20 +531,27 @@ D:\Build\.venv\Scripts\python.exe -m pip install -r D:\Build\AI-hy\requirements.
 `evidence_text / quote / source_url / source_snippet / relevance_reason / confidence`。
 离线模式由 `heuristic_evidence()` 执行同样的「关键词相关 + 宁缺毋滥」策略。
 
-### 报告结构：资深技术研究员
+### 报告结构：大纲 → 分节写作 → 引用校验
 
-`draft_report` 的提示词（`prompts.DRAFT_SYSTEM`）按「资深技术研究员」模板生成：
+针对「摘要太水 / 逻辑割裂 / 引用堆叠 / 缺乏推演」四个实测问题，报告生成拆成三步（`reporting.py`）：
 
-1. **先总结，后分点**：摘要用 2~3 句话综合证据直接回答问题，不复述问题；
-2. **消除重复**：同义证据合并为一条，引用写成 `[S1][S2]`；
-3. **强制引用**：关键发现每一条结尾都必须带 `[S1]` 角标，编号只能来自证据列表；
-4. **固定结构**：`## 摘要` / `## 关键发现` / `## 局限与未证实`；证据不足时写「当前资料未覆盖 XX 方面」；
-5. **语气专业**：客观书面化，禁止「今天给大家 / 我们来看看」这类口语。
+1. **证据卡片化**（`summarize_sources`）：给每条证据补 `sub_question`（归属子问题）、`kind`
+   （定义/机制/数据/案例/观点）、`promo`（营销/证言标记），同源同义证据合并并记录 `merged_urls`；
+2. **大纲规划**（`plan_outline`，新增节点）：模型输出 `{"sections":[{title, goal, evidence_ids}]}`，
+   失败/离线时用规则大纲（摘要 → 按子问题分的内容节 → 分析与推演 → 局限与未证实）；
+3. **分节写作**（`draft_report`）：摘要单独用「结论 → 关键依据 → 适用边界」三段式提示词，
+   每个内容节只喂本节证据（引用编号仍是全局 `[S#]`），推演单独成节、每条以【推断】开头；
+4. **引用校验**（`draft_review`，新增节点）：校验编号合法性、单句 ≤2 个角标、引用与句子相关、
+   关键发现条条有引用、摘要非空判断、小节完整；不达标先让模型最小改动重写一次，
+   **重写后问题更多就丢弃**，再程序剪枝（保留最相关 2 个角标）与补节兜底。
+
+`draft_review` 的结果写入 `final_output.draft_review`（issues / rewrites / rejected_rewrites /
+remaining_issues），前端节点名也做了中文化（"撰写报告"、"引用与结构校验"）。
 
 文末 `## 来源清单` 由程序按证据编号自动重建（`prompts.source_list_lines()`）：同一 URL 的多条证据
 合并为一行 `- [标题](URL)（[S1][S2]）`，未被引用的抓取页面也如实列出；模型自己写的来源章节会被
-`_strip_source_sections()` 删除，不会出现伪造来源。离线模式 `heuristic_draft()` 生成同样的三段式结构，
-并合并重复结论。
+`_strip_source_sections()` 删除，不会出现伪造来源。离线模式 `heuristic_draft()` 生成同样结构
+（含【推断】小节），并合并重复结论。
 
 ## 9. 测试
 
@@ -564,8 +583,11 @@ pytest -q
 - 修改/终止分支、拒绝写操作分支、搜索全失败降级；
 - **P0 质量闭环**：子问题覆盖度只把“命中主题实体与语义块”算覆盖；缺口补检受最大轮次约束；
   claim→quote 校验会丢弃明显无关的“证据”，但保留同义改写；图级测试验证补检轮会合并新页面。
+- **报告质量闭环**：证据卡片化（子问题/类型/去重/营销标记）、规则大纲与 LLM 大纲校验、
+  引用硬校验（编号越界/单句堆叠/引用错配/摘要空判断/关键发现无引用）、程序修复（剪枝、补节）、
+  “重写后更差就丢弃”的回归保护、两个消融开关（`AGENT_EVIDENCE_CARDS`、`AGENT_DRAFT_REVIEW`）。
 
-当前：**131 passed**。
+当前：**149 passed**。
 
 ## 10. 验收对照
 

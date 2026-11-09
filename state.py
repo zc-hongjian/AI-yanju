@@ -111,6 +111,14 @@ class ResearchState(TypedDict, total=False):
     # 本地知识库召回片段（RAG）：见 rag.search_knowledge()
     kb_hits: list[dict[str, Any]]
 
+    # ---- 报告质量闭环：大纲 → 分节写作 → 引用校验（见 reporting.py） ----
+    # 报告大纲：sections（标题/目标/证据编号）+ uncovered（无证据子问题）
+    outline: dict[str, Any]
+    # 未清洗的原始草稿：保留 [S#] 角标，供 draft_review 校验与重写
+    draft_raw: str
+    # 草稿校验结果：issues / passed / rewrites / fixes
+    draft_review: dict[str, Any]
+
     # ---- 可观测性：节点级 token 用量（由 graph._instrument 写入） ----
     node_usage: dict[str, dict[str, int]]
 
@@ -157,5 +165,8 @@ def new_state(
         retrieval_round=0,
         gap_queries=[],
         kb_hits=[],
+        outline={},
+        draft_raw="",
+        draft_review={},
         node_usage={},
     )

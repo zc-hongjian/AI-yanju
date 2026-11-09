@@ -2,7 +2,7 @@
 
 > 快照时间：2026-11-09
 > 代码位置：`D:\Build\AI-hy`
-> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」均已落地，并通过 **131 个测试**、9 项功能验收、6/6 知识库验收；这批改动**尚未提交 Git**（上次提交为 `3f39891`）。
+> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」、**报告质量闭环（证据卡片化 → 大纲 → 分节写作 → 引用硬校验）**均已落地，并通过 **152 个测试**、9 项功能验收、6/6 知识库验收；本批报告质量改动尚未提交 Git（上次提交为 `298fc3f`）。
 
 ---
 
@@ -19,7 +19,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 语言 / 运行环境 | Python 3.14.5，项目虚拟环境 `D:\Build\AI-hy\.venv` |
-| 工作流 | LangGraph（`StateGraph` + `interrupt` + `SqliteSaver` checkpointer，12 节点） |
+| 工作流 | LangGraph（`StateGraph` + `interrupt` + `SqliteSaver` checkpointer，14 节点） |
 | 大模型 | OpenAI / 兼容 OpenAI 的接口（`.env` 或网页「模型设置」均可配置，网页配置只存进程内存） |
 | 工具调用 | OpenAI SDK Function Calling；网关不支持 tools 时回退 JSON 输出 |
 | 检索 | 联网搜索 + 本地知识库混合检索（BM25 + 可选向量 + RRF，`rag.py`） |
@@ -27,16 +27,17 @@
 | Web | FastAPI + Uvicorn + 深色主题单页 `index.html`（NDJSON 流式日志；右上角可填 Key/Base/模型） |
 | 网页处理 | requests + BeautifulSoup + charset-normalizer |
 | 评测 | 自研 40 题数据集 + mock/真实联网/真实 LLM 三种模式 |
-| 代码规模 | `graph.py` ~1421 行、`tools.py` ~1113 行、`llm_client.py` ~830 行、`quality.py` ~334 行、`web.py` ~564 行、`persistence.py` ~166 行、`rag.py` ~414 行、`tracing.py` ~258 行、`index.html` ~1869 行 |
-| 质量状态 | 131 个 pytest 用例通过；9 项功能闭环验收 9/9；6/6 知识库验收；40 题真实联网评测完成；会话可跨进程恢复 |
+| 代码规模 | `graph.py` ~1640 行、`tools.py` ~1133 行、`llm_client.py` ~1000 行、`quality.py` ~361 行、`reporting.py` ~600 行、`web.py` ~587 行、`persistence.py` ~176 行、`rag.py` ~423 行、`tracing.py` ~266 行、`index.html` ~1899 行 |
+| 质量状态 | 152 个 pytest 用例通过；9 项功能闭环验收 9/9；6/6 知识库验收；40 题真实联网评测完成；会话可跨进程恢复；报告有引用硬校验与回退保护 |
 
 ## 3. 目录结构
 
 ```text
 AI-hy/
-├── graph.py              # LangGraph 图：12 个节点 + 条件边 + 3 处 interrupt + checkpointer
+├── graph.py              # LangGraph 图：14 个节点 + 条件边 + 3 处 interrupt + checkpointer
 ├── state.py              # ResearchState TypedDict、初始状态、质量闭环字段
 ├── quality.py            # P0：子问题覆盖度 + claim→quote 支持性校验
+├── reporting.py          # 报告质量：证据卡片化 + 大纲 + 引用硬校验/程序修复
 ├── rag.py                # P0-3：知识库分块 + BM25 + 可选向量 + RRF + 索引缓存
 ├── tracing.py            # P0-2：节点 Span + 模型价目表成本归因
 ├── tools.py              # 5 个工具、JSON Schema、重试/退避/熔断、SSRF、写操作门禁
@@ -52,7 +53,7 @@ AI-hy/
 ├── check_llm.py          # 真实 LLM 配置自检（读 .env、真实调用一次、可 --set-key）
 ├── evaluation/           # 40 题评测集、跑分、报告、验收脚本、mock fixture
 ├── data/                 # 运行期 SQLite（checkpoints / sessions，已 gitignore）
-├── tests/                # 131 个单元/集成/端到端测试
+├── tests/                # 152 个单元/集成/端到端测试
 ├── README.md             # 使用与验收文档
 ├── OPTIMIZATION.md       # 优化路线图 + P0 实施记录
 ├── PROJECT_SUMMARY.md    # 本文
@@ -63,20 +64,23 @@ AI-hy/
 └── .env.example          # 环境变量模板（真实 Key 只在被忽略的 .env）
 ```
 
-## 4. 工作流：12 个节点 + 3 次人工暂停
+## 4. 工作流：14 个节点 + 3 次人工暂停
 
 ```mermaid
 flowchart TD
     A[receive_question] --> B[plan_research]
     B --> C[search_web]
     C --> D[fetch_pages]
-    D --> E[summarize_sources]
+    D --> K[retrieve_knowledge]
+    K --> E[summarize_sources<br/>证据卡片化]
     E --> Q{check_coverage}
     Q -- 覆盖不足 --> C
-    Q -- 覆盖达标/无补检预算 --> F[draft_report]
-    F --> G{human_review_draft<br/>interrupt ①}
+    Q -- 覆盖达标/无补检预算 --> O[plan_outline<br/>按子问题分节]
+    O --> F[draft_report<br/>分节写作]
+    F --> R[draft_review<br/>引用硬校验]
+    R --> G{human_review_draft<br/>interrupt ①}
     G -- 通过 --> H{human_confirm_actions<br/>interrupt ② 发邮件<br/>interrupt ③ 存 Notion}
-    G -- 修改意见 --> F
+    G -- 修改意见 --> O
     G -- 终止 --> J[finalize]
     H --> I[execute_actions<br/>human_approved=True]
     I --> J
@@ -88,13 +92,16 @@ flowchart TD
 | 2 | `plan_research` | Function Calling/JSON/启发式生成 2~3 条 query + 3~5 个子问题 |
 | 3 | `search_web` | 多提供方搜索、URL 去重、多轮合并；第二轮只跑缺口 query |
 | 4 | `fetch_pages` | 自适应页数、候选重排、编码/正文清洗、URL + 内容指纹去重 |
-| 5 | `summarize_sources` | 提取证据，逐条做 claim→quote 支持校验 |
-| 6 | `check_coverage` | 计算子问题覆盖度；不足时生成 gap query，最多补 1 轮 |
-| 7 | `draft_report` | 生成「摘要 / 关键发现 / 局限与未证实」报告 + 程序化来源清单 |
-| 8 | `human_review_draft` | **interrupt ①**：通过 / 修改 / 终止；支持人工改稿（API 层） |
-| 9 | `human_confirm_actions` | **interrupt ②③**：发邮件前、存 Notion 前分别确认 |
-| 10 | `execute_actions` | 只对已确认动作调用写工具，`human_approved=True` 只在这里出现 |
-| 11 | `finalize` | 状态、报告、来源、证据、覆盖率、支持率、token/成本/耗时、日志摘要 |
+| 5 | `retrieve_knowledge` | 知识库混合检索；按问题词面过滤无关片段 |
+| 6 | `summarize_sources` | 提取证据 → claim→quote 校验 → **证据卡片化**（子问题/类型/去重/营销标记） |
+| 7 | `check_coverage` | 计算子问题覆盖度；不足时生成 gap query，最多补 1 轮 |
+| 8 | `plan_outline` | **新增**：LLM/规则大纲，按子问题分节并分配 `[S#]`；修改意见先改大纲 |
+| 9 | `draft_report` | **分节写作**：摘要「结论→依据→边界」、关键发现程序生成、推演单独成节 |
+| 10 | `draft_review` | **新增**：引用/结构硬校验 → 模型最小改动重写（更差则丢弃）→ 程序剪枝/补节 |
+| 11 | `human_review_draft` | **interrupt ①**：通过 / 修改 / 终止；支持人工改稿（API 层） |
+| 12 | `human_confirm_actions` | **interrupt ②③**：发邮件前、存 Notion 前分别确认 |
+| 13 | `execute_actions` | 只对已确认动作调用写工具，`human_approved=True` 只在这里出现 |
+| 14 | `finalize` | 状态、报告、来源、证据、覆盖率、支持率、草稿校验、token/成本/耗时、日志摘要 |
 
 ### 三处人工暂停
 
@@ -200,6 +207,22 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 | 接入 | `retrieve_knowledge` 节点把命中片段转成 `kb://` 来源追加进 `fetched_pages` | 复用证据抽取 / 引用 / 校验 |
 | 验收 | `evaluation/kb_check.py`：只给 `knowledge/`、不联网 | **6/6 passed** |
 
+### 6.9 报告质量闭环：证据卡片 → 大纲 → 分节写作 → 引用校验（2026-11-09）
+
+实测四个问题：**摘要太水 / 逻辑割裂 / 引用堆叠错误 / 缺乏推演**。对应四层改造（新增 `reporting.py`）：
+
+| 能力 | 实现 | 治什么 |
+| --- | --- | --- |
+| 证据卡片化 | `summarize_sources` → `reporting.enrich_evidence`：`sub_question` / `kind` / `promo` / 同义合并（`merged_count`、`merged_urls`） | 引用堆叠：同页同义证据不再反复出现，营销话术不再当主要依据 |
+| 大纲规划 | 新增 `plan_outline` 节点：LLM 输出 `{sections:[{title,goal,evidence_ids}]}`，失败回落规则大纲；`uncovered` 只保留真没证据的子问题 | 逻辑割裂：一节只写一个子问题，不再“一个来源一段” |
+| 分节写作 | `draft_report` 按节调用，每节只喂本节证据（编号仍是全局 `[S#]`）；摘要独立提示词（结论→依据→边界）；「关键发现」由程序按证据生成；推演单独成节、每条【推断】 | 摘要太水 / 缺乏推演 |
+| 引用硬校验 | 新增 `draft_review` 节点：编号越界、单句 >2 角标、引用与句子无词面关联、关键发现无引用、摘要空判断、小节缺失；不达标让模型最小改动重写一次，**问题更多就丢弃**，再程序剪枝/补节 | 引用堆叠错误；防止“修引用”把报告改坏 |
+
+结果写入 `final_output.draft_review`（`status / issues / rewrites / rejected_rewrites / remaining_issues`）与
+`final_output.outline`；两个消融开关 `AGENT_EVIDENCE_CARDS`、`AGENT_DRAFT_REVIEW`。
+另外 `retrieve_knowledge` 增加问题词面相关性门槛：与问题无交集的 KB 片段不再进入证据链
+（实测会把本项目自己的 RAG 设计文档混进“LangGraph vs AutoGen”报告）。
+
 ## 7. 评测与验收结果
 
 ### 7.1 真实联网 40 题（离线 LLM + 真实检索，未调用付费 API）
@@ -237,7 +260,7 @@ mock 只验证流水线机制（搜索→抓取→证据→报告→引用→人
 
 - `evaluation/acceptance_check.py`：**9/9 通过**，覆盖问题拆解、联网搜索、抓取清洗、证据表、
   结构化报告、引用校验、三处人工暂停 + 写门禁、重试降级、可观测；
-- `pytest`：**131 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮、P0-2 Trace/成本、P0-3 RAG）。
+- `pytest`：**152 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮、P0-2 Trace/成本、P0-3 RAG、报告质量 21 例）。
 
 ## 8. 运行方式
 
@@ -329,6 +352,9 @@ python evaluation/acceptance_check.py
 11. **知识库规模**：向量用纯 Python 余弦，约 1 万 chunk 上限；embedding 需要服务提供 `/embeddings`（DeepSeek 不提供，可换智谱 `embedding-3` 或只用 BM25）。
 12. **价目表需维护**：`config/pricing.json` 手写，模型调价后要更新；未录入模型按 env 单价估算并标记。`glm-4-flash` 等免费模型成本真实为 0。
 13. **Trace 落盘**：`logs/<trace_id>.trace.jsonl` 与 JSONL 日志同目录，长期运行需要清理策略。
+14. **报告质量仍依赖模型**：分节写作把单次调用拆成 5~6 次，单题耗时从 ~140s 升到 ~190s；
+   引用校验只能查“格式与词面相关”，查不出“结论对但因果说错”；重写被丢弃时仍会留下 1~10 个
+   已知问题（写入 `draft_review`，不阻塞流程）。
 
 ## 10. 优化路线（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）
 
@@ -345,6 +371,7 @@ python evaluation/acceptance_check.py
 - ~~`SqliteSaver` 持久化会话、会话列表/续跑~~（P0-1 已完成）；
 - ~~节点级 Trace、成本归因、价目表~~（P0-2 已完成）；
 - ~~本地知识库混合检索（BM25 + 向量 + RRF）~~（P0-3 已完成）；
+- ~~报告质量闭环：证据卡片化 / 大纲 / 分节写作 / 引用硬校验~~（已完成，见 §6.9）；
 - 取消运行、LLM token 流式、页面内改稿、历史报告导出；
 - 真实模型 + LLM-as-judge 评测；提示注入防御与审计。
 
@@ -370,6 +397,7 @@ python evaluation/acceptance_check.py
 | [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) | 9 项功能闭环验收报告 |
 | [graph.py](graph.py) | 12 节点图、interrupt、条件边、finalize |
 | [quality.py](quality.py) | 子问题覆盖度 + claim 支持校验 |
+| [reporting.py](reporting.py) | 证据卡片化 / 大纲 / 引用硬校验 / 程序修复 |
 | [tools.py](tools.py) | 5 工具、重试/熔断、SSRF、写门禁 |
 | [llm_client.py](llm_client.py) | LLM 客户端 + 离线回退 |
 | [prompts.py](prompts.py) | 全部提示词 |
@@ -383,6 +411,7 @@ python evaluation/acceptance_check.py
 | [tests/test_persistence.py](tests/test_persistence.py) | P0-1 重启恢复/历史 API/多轮上下文测试 |
 | [tests/test_tracing.py](tests/test_tracing.py) | P0-2 价目表/Span/成本归因/API 测试 |
 | [tests/test_rag.py](tests/test_rag.py) | P0-3 分块/BM25/降级/图级知识库来源测试 |
+| [tests/test_reporting.py](tests/test_reporting.py) | 报告质量 21 例：卡片化/大纲/引用校验/修复/重写回归保护 |
 
 ## 12. 复现命令速查
 

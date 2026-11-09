@@ -16,6 +16,7 @@ import time
 from typing import Any, Iterable
 
 import prompts
+import reporting
 
 
 class LLMError(RuntimeError):
@@ -316,19 +317,39 @@ class LLMClient:
             self.usage["calls"] += 1
         return vectors
 
-    def _chat(self, system: str, user: str, *, temperature: float = 0.2, max_tokens: int = 2200) -> str:
+    def _chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 2200,
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
         if self.mode != "openai":
             raise LLMError("当前为 offline 模式，自由文本调用不可用")
-        try:
-            resp = self._sdk().chat.completions.create(
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+        def _create(extra: dict[str, Any]) -> Any:
+            return self._sdk().chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                **extra,
             )
+
+        try:
+            try:
+                resp = _create({"response_format": response_format} if response_format else {})
+            except Exception:
+                # 部分兼容网关不支持 response_format：去掉再试一次
+                if not response_format:
+                    raise
+                resp = _create({})
         except Exception as exc:
             raise LLMError(f"LLM 请求失败：{exc}") from exc
         self._record_usage(resp)
@@ -338,7 +359,20 @@ class LLMClient:
         return content
 
     def chat_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict[str, Any]:
-        return parse_json_object(self._chat(system, user, temperature=temperature))
+        # JSON 模式下要求网关返回合法 JSON（智谱/OpenAI 都支持），解析失败再退回纯文本解析
+        try:
+            return parse_json_object(
+                self._chat(
+                    system,
+                    user,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+            )
+        except LLMError as exc:
+            if "JSON" not in str(exc):
+                raise
+            return parse_json_object(self._chat(system, user, temperature=temperature))
 
     # ---------------------------------------------- 检索计划（技术搜索专家）
     def plan_research(
@@ -504,6 +538,43 @@ class LLMClient:
             }
         return {"evidence": evidence, "note": note, "mode": "openai"}
 
+    # ------------------------------------------------------------ 大纲规划
+    def plan_outline(
+        self,
+        question: str,
+        sub_questions: list[str],
+        evidence: list[dict[str, Any]],
+        *,
+        uncovered: list[str] | None = None,
+        max_sections: int = 4,
+    ) -> dict[str, Any] | None:
+        """让模型设计报告大纲；offline 模式或失败返回 None（由规则大纲兜底）。"""
+        evidence = list(evidence)
+        if self.mode != "openai" or not evidence:
+            return None
+        last_error = ""
+        # 模型偶尔输出不合法 JSON（实测一次），重试一次比直接降级回规则大纲更划算；
+        # 但超时重试只会让整条链路更慢，这里不重试。
+        for attempt in range(2):
+            try:
+                data = self.chat_json(
+                    prompts.OUTLINE_SYSTEM,
+                    prompts.outline_user(question, sub_questions, evidence, uncovered or ()),
+                )
+            except LLMError as exc:
+                last_error = str(exc)
+                if "JSON" not in last_error:
+                    break
+                continue
+            outline = reporting.normalize_llm_outline(
+                data, evidence, uncovered=uncovered or (), max_sections=max_sections + 2
+            )
+            if outline:
+                return outline
+            last_error = "大纲 JSON 结构不符合预期"
+        print(f"[研究助手] 大纲生成失败，改用规则大纲：{last_error}", flush=True)
+        return None
+
     # ------------------------------------------------------------ 报告草稿
     def draft_report(
         self,
@@ -512,22 +583,132 @@ class LLMClient:
         sources: Iterable[dict[str, Any]],
         *,
         feedback: str = "",
+        outline: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
-        """返回 (markdown, mode)。LLM 失败时降级为模板，不抛异常。"""
+        """返回 (markdown, mode)。LLM 失败时降级为模板，不抛异常。
+
+        ``outline`` 存在时按节生成（摘要单独写、每节只喂本节证据），
+        这是“逻辑割裂 / 摘要水 / 引用堆叠”的结构性修法；没有大纲时退回单次生成。
+        """
         evidence = list(evidence)
         sources = list(sources)
+        sections = [item for item in ((outline or {}).get("sections") or []) if isinstance(item, dict)]
+        uncovered = list((outline or {}).get("uncovered") or [])
         if self.mode != "openai":
-            return heuristic_draft(question, evidence, sources, feedback), "offline"
-        try:
-            text = self._chat(
-                prompts.DRAFT_SYSTEM,
-                prompts.draft_user(question, evidence, sources, feedback),
-                temperature=0.3,
-                max_tokens=2600,
+            return (
+                heuristic_draft(question, evidence, sources, feedback, uncovered=uncovered),
+                "offline",
             )
-        except LLMError:
-            return heuristic_draft(question, evidence, sources, feedback), "offline_fallback"
+        if not sections:
+            try:
+                text = self._chat(
+                    prompts.DRAFT_SYSTEM,
+                    prompts.draft_user(question, evidence, sources, feedback),
+                    temperature=0.3,
+                    max_tokens=2600,
+                )
+            except LLMError:
+                return heuristic_draft(question, evidence, sources, feedback, uncovered=uncovered), "offline_fallback"
+            return text, "openai"
+        try:
+            text = self._draft_by_sections(
+                question, evidence, sections, uncovered=uncovered, feedback=feedback
+            )
+        except LLMError as exc:
+            print(f"[研究助手] 分节写作失败，降级模板草稿：{exc}", flush=True)
+            return heuristic_draft(question, evidence, sources, feedback, uncovered=uncovered), "offline_fallback"
         return text, "openai"
+
+    def _draft_by_sections(
+        self,
+        question: str,
+        evidence: list[dict[str, Any]],
+        sections: list[dict[str, Any]],
+        *,
+        uncovered: list[str],
+        feedback: str,
+    ) -> str:
+        all_ids = list(range(1, len(evidence) + 1))
+        parts: list[str] = []
+        previous: list[str] = []
+        has_summary = False
+        for section in sections:
+            title = str(section.get("title") or "").strip()
+            key = str(section.get("key") or "")
+            if not title:
+                continue
+            ids = [int(value) for value in (section.get("evidence_ids") or all_ids)]
+            ids = [value for value in ids if 1 <= value <= len(evidence)] or all_ids
+            if title == reporting.LIMITS_TITLE or key == "limits":
+                parts.append("\n".join(reporting.limits_lines(evidence, uncovered)))
+                previous.append(title)
+                continue
+            if title == reporting.SUMMARY_TITLE or key == "summary":
+                body = self._chat(
+                    prompts.DRAFT_SUMMARY_SYSTEM,
+                    prompts.draft_summary_user(question, evidence, ids=ids, feedback=feedback),
+                    temperature=0.2,
+                    max_tokens=500,
+                )
+                parts.append(f"## {reporting.SUMMARY_TITLE}\n\n{_strip_heading(body)}")
+                previous.append(title)
+                has_summary = True
+                continue
+            if title == reporting.FINDINGS_TITLE or key == "findings":
+                # 「关键发现」由程序按证据生成：条条有角标、不重复、不会被模型写成大段散文
+                body = "\n".join(reporting.find_bullets(evidence, ids))
+                parts.append(f"## {reporting.FINDINGS_TITLE}\n\n{body}")
+                previous.append(title)
+                continue
+            if title == reporting.ANALYSIS_TITLE or key == "analysis":
+                body = self._chat(
+                    prompts.DRAFT_ANALYSIS_SYSTEM,
+                    prompts.draft_analysis_user(
+                        question, evidence, ids=ids, uncovered=uncovered, feedback=feedback
+                    ),
+                    temperature=0.4,
+                    max_tokens=900,
+                )
+                parts.append(f"## {reporting.ANALYSIS_TITLE}\n\n{_strip_heading(body)}")
+                previous.append(title)
+                continue
+            body = self._chat(
+                prompts.DRAFT_SECTION_SYSTEM,
+                prompts.draft_section_user(
+                    question, section, evidence, previous_titles=previous, feedback=feedback
+                ),
+                temperature=0.3,
+                max_tokens=900,
+            )
+            parts.append(f"## {title}\n\n{_strip_heading(body)}")
+            previous.append(title)
+
+        if not has_summary:
+            parts.insert(
+                0,
+                f"## {reporting.SUMMARY_TITLE}\n\n{_fallback_summary(question, evidence)}",
+            )
+        return "\n\n".join(parts)
+
+    def rewrite_draft(
+        self,
+        question: str,
+        draft: str,
+        issues: list[dict[str, Any]],
+    ) -> str | None:
+        """按问题清单做一次最小改动重写；offline / 失败返回 None。"""
+        if self.mode != "openai" or not issues:
+            return None
+        try:
+            return self._chat(
+                prompts.REWRITE_SYSTEM,
+                prompts.rewrite_user(question, draft, issues),
+                temperature=0.2,
+                max_tokens=3000,
+            )
+        except LLMError as exc:
+            print(f"[研究助手] 草稿重写失败，改为程序修复：{exc}", flush=True)
+            return None
 
 
 # --------------------------------------------------------------------- 工具函数
@@ -779,11 +960,41 @@ def _strip_claim_end(text: str) -> str:
     return str(text or "").strip().rstrip("。.；;，, ")
 
 
+def _strip_heading(text: str) -> str:
+    """去掉模型回显的小节标题（我们自己在拼接时加标题）。"""
+    lines = str(text or "").strip().splitlines()
+    while lines and lines[0].lstrip().startswith("#"):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def _fallback_summary(question: str, evidence: list[dict[str, Any]]) -> str:
+    """分节写作失败时的摘要兜底：结论 + 依据 + 边界，全部来自证据原句。"""
+    picked: list[int] = []
+    for index, item in enumerate(evidence, start=1):
+        if item.get("promo"):
+            continue
+        picked.append(index)
+        if len(picked) >= 2:
+            break
+    if not picked:
+        picked = list(range(1, min(len(evidence), 2) + 1))
+    sentences: list[str] = []
+    for index in picked:
+        item = evidence[index - 1]
+        text = _strip_claim_end(item.get("claim") or item.get("quote") or "")
+        if text:
+            sentences.append(f"{text}[S{index}]。")
+    sentences.append("以上判断仅基于可回溯到原文的证据，未覆盖的方面不作结论。")
+    return "".join(sentences[:3])
+
+
 def heuristic_draft(
     question: str,
     evidence: list[dict[str, Any]],
     sources: list[dict[str, Any]],
     feedback: str = "",
+    uncovered: Iterable[str] = (),
 ) -> str:
     # 研究问题可能是多行（比如直接粘贴会议纪要/表格），标题与摘要折叠成一行并去掉表格竖线，
     # 避免把 "| 议题 | 负责人 |" 这类行原样插进 Markdown 报告。
@@ -822,18 +1033,13 @@ def heuristic_draft(
     for claim, indices in merged:
         lines.append(f"- {_strip_claim_end(claim)} {_cite(indices)}")
 
-    # 局限与未证实：宁可显式说明“未覆盖”，也不拿常识补写
-    lines += [
-        "",
-        "## 局限与未证实",
-        "",
-        "- 当前资料未覆盖该问题的全部方面：以上结论仅限可回溯原文的摘录范围，未覆盖部分无法确认。",
-        f"- 证据数量有限（{len(evidence)} 条，来自 {len(sources)} 个网页），单一来源的表述可能不具代表性。",
-        "- 本报告为逐句摘录式概括，未做跨来源交叉验证；网页内容可能过期或存在立场偏差，引用前应复核原文。",
-        "",
-        "## 来源清单",
-        "",
-    ]
+    # 分析与推演：离线模式只陈述证据之间可以确定的关系，并明确标注这是推断
+    lines.append("")
+    lines += reporting.analysis_lines(evidence, list(uncovered))
+
+    # 局限与未证实：结构化列出未覆盖子问题与证据局限，不写套话
+    lines += reporting.limits_lines(evidence, list(uncovered))
+    lines += ["## 来源清单", ""]
     lines += prompts.source_list_lines(evidence, sources)
     return "\n".join(lines)
 

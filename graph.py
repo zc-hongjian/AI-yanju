@@ -1,12 +1,13 @@
-"""LangGraph 图定义：12 个节点 + 三处人工中断 + 条件边 + checkpoint。
+"""LangGraph 图定义：14 个节点 + 三处人工中断 + 条件边 + checkpoint。
 
 流程：
 receive_question → plan_research → search_web → fetch_pages → retrieve_knowledge
 → summarize_sources → check_coverage ─┬─(覆盖不足)→ search_web（补检一轮）
-                                      └─(覆盖达标/无补检预算)→ draft_report
-→ draft_report → human_review_draft ─┬─(通过)→ human_confirm_actions → execute_actions → finalize
-                                     ├─(修改)→ draft_report
-                                     └─(终止)→ finalize
+                                      └─(覆盖达标/无补检预算)→ plan_outline
+→ plan_outline → draft_report → draft_review → human_review_draft
+      ─┬─(通过)→ human_confirm_actions → execute_actions → finalize
+       ├─(修改)→ plan_outline
+       └─(终止)→ finalize
 
 human_review_draft 与 human_confirm_actions 内部共调用三次 interrupt()：
 草稿审核、发邮件前确认、保存 Notion 前确认。
@@ -16,6 +17,7 @@ human_review_draft 与 human_confirm_actions 内部共调用三次 interrupt()�
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import re
 import time
@@ -31,6 +33,7 @@ from langgraph.types import interrupt
 
 import prompts
 import rag
+import reporting
 import tools
 import tracing
 from llm_client import get_llm
@@ -53,6 +56,24 @@ COVERAGE_THRESHOLD = float(os.getenv("AGENT_COVERAGE_THRESHOLD", "0.6"))
 MAX_GAP_QUERIES = max(1, int(os.getenv("AGENT_MAX_GAP_QUERIES", "2")))
 # 抓取页数硬上限（自适应目标不会超过它）
 MAX_PAGES_HARD = max(MAX_PAGES, int(os.getenv("AGENT_MAX_PAGES_HARD", "6")))
+
+# ---- 报告质量闭环：证据卡片化 → 大纲 → 分节写作 → 引用校验 ----
+# 证据卡片上限：太多会让分节写作的提示词过长，质量反而下降
+MAX_EVIDENCE_CARDS = max(8, min(30, int(os.getenv("AGENT_EVIDENCE_CARDS_MAX", "20"))))
+# 报告最多按几个子问题分节（不含摘要/推演/局限）
+MAX_DRAFT_SECTIONS = max(1, min(5, int(os.getenv("AGENT_DRAFT_SECTIONS_MAX", "3"))))
+# 引用校验不通过时允许模型重写几次（默认 1 次，失败再走程序修复）
+MAX_DRAFT_REWRITES = max(0, min(2, int(os.getenv("AGENT_DRAFT_MAX_REWRITE", "1"))))
+
+
+def _evidence_cards_enabled() -> bool:
+    """消融开关：AGENT_EVIDENCE_CARDS=0 时退回“摘录句直接进报告”的旧行为。"""
+    return os.getenv("AGENT_EVIDENCE_CARDS", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _draft_review_enabled() -> bool:
+    """消融开关：AGENT_DRAFT_REVIEW=0 时不做引用硬校验（保留指标但不重写）。"""
+    return os.getenv("AGENT_DRAFT_REVIEW", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 COMPARISON_RE = re.compile(r"对比|比较|区别|差异|优劣|优缺点|哪个更|vs\b|VS\b", re.I)
 MULTIHOP_RE = re.compile(r"为什么|如何|怎么|步骤|流程|机制|原理|分别|哪些因素|前置条件", re.I)
@@ -591,6 +612,29 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
         )
         return sl.updates(fetched_pages=pages, kb_hits=[])
     existing = {str(page.get("url") or "") for page in pages}
+    # 相关性门槛：知识库里有“研究助手自己的设计方案”这类项目内文档，
+    # 只要问题没提到它们的关键词，就不该把片段塞进证据链（实测会污染引用与来源清单）。
+    terms: set[str] = set()
+    for text in [question, *[str(item) for item in plan.get("sub_questions") or []]]:
+        for term in coverage_terms(text):
+            if (term.isascii() and len(term) >= 2) or (not term.isascii() and len(term) >= 3):
+                terms.add(term)
+    filtered: list[dict[str, Any]] = []
+    for hit in hits:
+        body = f"{hit.get('text') or ''} {hit.get('title') or ''} {hit.get('heading') or ''}".lower()
+        if not terms or any(term in body for term in terms):
+            filtered.append(hit)
+    dropped = len(hits) - len(filtered)
+    hits = filtered
+    if not hits:
+        sl.add(
+            node_name="retrieve_knowledge",
+            input_summary=f"{len(queries)} 条查询；{stats['documents']} 篇文档",
+            output_summary=f"命中片段与问题无词面交集（已过滤 {dropped} 个），跳过知识库",
+            status="skipped",
+            latency_ms=_elapsed_ms(start),
+        )
+        return sl.updates(fetched_pages=pages, kb_hits=[])
     added: list[dict[str, Any]] = []
     for hit in hits:
         url = str(hit.get("url") or "")
@@ -622,6 +666,7 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
         input_summary=f"{len(queries)} 条查询；{stats['documents']} 篇文档",
         output_summary=(
             f"命中 {len(hits)} 个片段（{hits[0].get('retriever')}），新增 {len(added)} 个知识库来源"
+            + (f"；已过滤 {dropped} 个与问题无关的片段" if dropped else "")
         ),
         status="ok" if added else "degraded",
         latency_ms=_elapsed_ms(start),
@@ -747,6 +792,23 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
     note = "；".join(item for item in notes if item)
     if verification.get("dropped"):
         note = (note + f"；已过滤 {verification['dropped']} 条未被原文支持的结论").lstrip("；")
+
+    # 报告质量：把“摘录句”升级成“证据卡片”（归属子问题 / 类型 / 去重 / 营销标记）。
+    # 这一步决定后面能不能按子问题分节写作，也直接减少“同一句话反复引用”。
+    card_stats: dict[str, Any] = {}
+    if _evidence_cards_enabled() and evidence:
+        sub_questions = [
+            str(item).strip()
+            for item in (state.get("plan") or {}).get("sub_questions") or []
+            if str(item).strip()
+        ]
+        evidence, card_stats = reporting.enrich_evidence(
+            evidence, sub_questions, max_items=MAX_EVIDENCE_CARDS
+        )
+        if card_stats.get("deduped"):
+            note = (note + f"；合并 {card_stats['deduped']} 条重复证据").lstrip("；")
+        if card_stats.get("promo"):
+            note = (note + f"；标记营销/证言类证据 {card_stats['promo']} 条").lstrip("；")
     if not evidence:
         errors.append(
             {"node": "summarize_sources", "type": "no_evidence", "error": note or "未提取到可验证证据"}
@@ -758,7 +820,9 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
             output_summary=(
                 f"{len(evidence)}/{len(raw_evidence)} 条可用证据；"
                 f"支持率={verification.get('support_rate', 0):.0%}；"
-                f"知识库证据 {len(kb_items)} 条"
+                f"知识库证据 {len(kb_items)} 条；"
+                f"卡片化：归属子问题 {card_stats.get('assigned', 0)} 条/"
+                f"合并 {card_stats.get('deduped', 0)} 条/营销 {card_stats.get('promo', 0)} 条"
             ),
             status="ok" if evidence else "degraded",
             error=None if evidence else (note or "未提取到可验证证据"),
@@ -843,8 +907,70 @@ def check_coverage(state: ResearchState) -> dict[str, Any]:
     return sl.updates(coverage=coverage, coverage_summary=summary, gap_queries=[])
 
 
-def route_after_coverage(state: ResearchState) -> Literal["search_web", "draft_report"]:
-    return "search_web" if state.get("gap_queries") else "draft_report"
+def route_after_coverage(state: ResearchState) -> Literal["search_web", "plan_outline"]:
+    return "search_web" if state.get("gap_queries") else "plan_outline"
+
+
+# ================================================================ 节点 5.7：大纲
+def plan_outline(state: ResearchState) -> dict[str, Any]:
+    """把证据按子问题编排成报告大纲（LLM 设计，失败/离线用规则兜底）。
+
+    大纲的价值：写作时“一节只喂本节证据”，从结构上避免
+    “一个来源一段 + 同一句话反复引用 + 想到哪写到哪”。
+    """
+    sl = StepLog(state)
+    question = str(state.get("research_question") or "")
+    evidence = list(state.get("evidence") or [])
+    plan = state.get("plan") or {}
+    sub_questions = [str(item).strip() for item in plan.get("sub_questions") or [] if str(item).strip()]
+    coverage_summary = state.get("coverage_summary") or {}
+    # “未覆盖”只保留真的没有证据支撑的子问题：
+    # 覆盖率是词面代理，可能把“其实写了整节”的子问题也标成未覆盖，
+    # 那样报告会一边写这一节、一边在局限里说“未覆盖”，逻辑自相矛盾。
+    assigned = {str(card.get("sub_question") or "") for card in evidence if card.get("sub_question")}
+    uncovered = [
+        str(item) for item in coverage_summary.get("uncovered") or [] if str(item) not in assigned
+    ]
+    feedback = state.get("human_feedback") or {}
+    feedback_text = str(feedback.get("comment") or "") if feedback.get("decision") == "revise" else ""
+    start = time.perf_counter()
+
+    llm = get_llm()
+    outline = (
+        llm.plan_outline(
+            question,
+            sub_questions,
+            evidence,
+            uncovered=uncovered,
+            max_sections=MAX_DRAFT_SECTIONS,
+        )
+        if callable(getattr(llm, "plan_outline", None))
+        else None
+    )
+    if not outline:
+        outline = reporting.build_outline(
+            question,
+            sub_questions,
+            evidence,
+            uncovered=uncovered,
+            max_content_sections=MAX_DRAFT_SECTIONS,
+        )
+    sections = list(outline.get("sections") or [])
+    # 有独立小节的子问题不算“未覆盖”
+    section_subs = {str(section.get("sub_question") or "") for section in sections}
+    outline["uncovered"] = [item for item in uncovered if item not in section_subs]
+    titles = [str(item.get("title") or "") for item in sections]
+    sl.add(
+        node_name="plan_outline",
+        input_summary=f"{len(evidence)} 条证据 / {len(sub_questions)} 个子问题 / 修订意见={summarize_text(feedback_text, 30) or '无'}",
+        output_summary=(
+            f"{len(sections)} 节（{outline.get('source', 'rule')}）：{summarize_text(' / '.join(titles), 90)}"
+        ),
+        status="ok" if sections else "degraded",
+        latency_ms=_elapsed_ms(start),
+        error=None if sections else "未能生成大纲",
+    )
+    return sl.updates(outline=outline)
 
 
 # ================================================================ 节点 6：草稿
@@ -922,14 +1048,20 @@ def draft_report(state: ResearchState) -> dict[str, Any]:
     evidence = list(state.get("evidence") or [])
     pages = state.get("fetched_pages") or []
     sources = _sources_from_pages(pages)
+    outline = state.get("outline") or {}
     feedback = state.get("human_feedback") or {}
     feedback_text = str(feedback.get("comment") or "") if feedback.get("decision") == "revise" else ""
     errors = list(state.get("errors") or [])
     start = time.perf_counter()
-    draft, mode = get_llm().draft_report(
-        question, evidence, sources, feedback=feedback_text
-    )
-    draft, dropped_urls = _sanitize_report(draft, sources, evidence)
+    llm = get_llm()
+    draft_kwargs: dict[str, Any] = {"feedback": feedback_text}
+    try:
+        if "outline" in inspect.signature(llm.draft_report).parameters:
+            draft_kwargs["outline"] = outline
+    except (TypeError, ValueError):  # 内建/桩对象签名不可读时按新接口调用
+        draft_kwargs["outline"] = outline
+    raw, mode = llm.draft_report(question, evidence, sources, **draft_kwargs)
+    draft, dropped_urls = _sanitize_report(raw, sources, evidence)
     if dropped_urls:
         errors.append(
             {
@@ -940,9 +1072,13 @@ def draft_report(state: ResearchState) -> dict[str, Any]:
         )
     latency = _elapsed_ms(start)
     status = "ok" if evidence and mode == "openai" else "degraded"
+    sections = [str(item.get("title") or "") for item in (outline.get("sections") or [])]
     sl.add(
         node_name="draft_report",
-        input_summary=f"{len(evidence)} 条证据/修改意见={summarize_text(feedback_text, 40) or '无'}",
+        input_summary=(
+            f"{len(evidence)} 条证据 / {len(sections)} 节大纲 / "
+            f"修改意见={summarize_text(feedback_text, 40) or '无'}"
+        ),
         output_summary=(
             f"{len(draft)} 字符草稿；mode={mode}；移除未验证 URL {len(dropped_urls)} 个"
         ),
@@ -950,7 +1086,105 @@ def draft_report(state: ResearchState) -> dict[str, Any]:
         latency_ms=latency,
         error=None if evidence else "无证据，草稿已标注未找到可靠来源",
     )
-    return sl.updates(draft_report=draft, errors=errors)
+    return sl.updates(draft_report=draft, draft_raw=raw, errors=errors)
+
+
+# ================================================================ 节点 6.5：草稿校验
+def draft_review(state: ResearchState) -> dict[str, Any]:
+    """引用/结构硬校验：不达标先让模型最小改动重写一次，再程序修复兜底。
+
+    校验项：引用编号存在、单句引用 ≤2、引用与句子相关、关键发现必须有引用、
+    摘要至少 2 句且有引用、必须有「分析与推演」和「局限与未证实」。
+    """
+    sl = StepLog(state)
+    question = str(state.get("research_question") or "")
+    evidence = list(state.get("evidence") or [])
+    sources = _sources_from_pages(state.get("fetched_pages") or [])
+    outline = state.get("outline") or {}
+    uncovered = [str(item) for item in outline.get("uncovered") or []]
+    raw = str(state.get("draft_raw") or state.get("draft_report") or "")
+    start = time.perf_counter()
+    report: dict[str, Any] = {
+        "enabled": _draft_review_enabled(),
+        "status": "skipped",
+        "issues": [],
+        "rewrites": 0,
+        "fixes": [],
+        "checks": {},
+    }
+    if not _draft_review_enabled() or not raw:
+        sl.add(
+            node_name="draft_review",
+            input_summary="草稿校验已关闭或草稿为空",
+            output_summary="跳过引用校验",
+            status="skipped",
+        )
+        return sl.updates(draft_review=report)
+
+    first = reporting.validate_draft(raw, evidence)
+    issues = list(first["issues"])
+    rewrites = 0
+    rejected = 0
+    rewriter = getattr(get_llm(), "rewrite_draft", None)
+    if issues and MAX_DRAFT_REWRITES and callable(rewriter):
+        best_raw, best_count = raw, len(issues)
+        for _ in range(MAX_DRAFT_REWRITES):
+            before = reporting.validate_draft(best_raw, evidence)
+            candidate = rewriter(question, best_raw, before["issues"])
+            if not candidate or not candidate.strip():
+                break
+            candidate = candidate.strip()
+            count = len(reporting.validate_draft(candidate, evidence)["issues"])
+            rewrites += 1
+            if count < best_count:
+                best_raw, best_count = candidate, count
+                if count == 0:
+                    break
+            else:
+                # 模型“修引用”时经常顺手把角标删光、把小节重排——
+                # 重写后问题更多就直接丢弃，保留原稿走程序修复。
+                rejected += 1
+                break
+        raw = best_raw
+    raw, fixes = reporting.repair_draft(raw, evidence, uncovered=uncovered)
+    final = reporting.validate_draft(raw, evidence)
+    draft, dropped_urls = _sanitize_report(raw, sources, evidence)
+    errors = list(state.get("errors") or [])
+    if dropped_urls:
+        errors.append(
+            {
+                "node": "draft_review",
+                "type": "citation_mismatch",
+                "error": "修订后仍移除未抓取 URL：" + ", ".join(dropped_urls[:5]),
+            }
+        )
+    if fixes:
+        report["fixes"] = fixes[:20]
+    report.update(
+        {
+            "status": "passed" if final["passed"] else ("rewritten" if rewrites and not rejected else "repaired"),
+            "issues": issues[:20],
+            "rewrites": rewrites,
+            "rejected_rewrites": rejected,
+            "checks": {
+                "checked_citations": final["checked_citations"],
+                "remaining_issues": final["issue_count"],
+                "evidence_total": len(evidence),
+            },
+        }
+    )
+    sl.add(
+        node_name="draft_review",
+        input_summary=f"草稿 {len(raw)} 字符 / {len(evidence)} 条证据",
+        output_summary=(
+            f"初检问题 {len(issues)} 个；重写 {rewrites} 次（丢弃 {rejected} 次）；"
+            f"程序修复 {len(fixes)} 处；剩余问题 {final['issue_count']} 个；状态={report['status']}"
+        ),
+        status="ok" if final["passed"] else "degraded",
+        latency_ms=_elapsed_ms(start),
+        error=None if final["passed"] else "引用/结构校验仍有未修复问题（已记录，不阻塞流程）",
+    )
+    return sl.updates(draft_report=draft, draft_raw=raw, draft_review=report, errors=errors)
 
 
 # ================================================================ 节点 7：草稿人工审核
@@ -963,9 +1197,11 @@ def human_review_draft(state: ResearchState) -> dict[str, Any]:
         "sources": _sources_from_pages(state.get("fetched_pages") or []),
         "evidence_count": len(state.get("evidence") or []),
         "revision_count": int(state.get("revision_count") or 0),
-        # 质量元数据：让审核者知道“覆盖了多少子问题、证据支持率如何”
+        # 质量元数据：让审核者知道“覆盖了多少子问题、证据支持率如何、引用校验过没过”
         "coverage_summary": state.get("coverage_summary") or {},
         "verification": state.get("verification") or {},
+        "draft_review": state.get("draft_review") or {},
+        "outline": [str(item.get("title") or "") for item in ((state.get("outline") or {}).get("sections") or [])],
     }
     decision = interrupt(payload)  # ← 在这里暂停，等待 Command(resume=...)
     if not isinstance(decision, dict):
@@ -1023,12 +1259,13 @@ def human_review_draft(state: ResearchState) -> dict[str, Any]:
     return sl.updates(**updates)
 
 
-def route_after_review(state: ResearchState) -> Literal["draft_report", "human_confirm_actions", "finalize"]:
+def route_after_review(state: ResearchState) -> Literal["plan_outline", "human_confirm_actions", "finalize"]:
     decision = str((state.get("human_feedback") or {}).get("decision") or "")
     if decision == "terminate":
         return "finalize"
     if decision == "revise":
-        return "draft_report"
+        # 修改意见先回大纲节点：意见往往改变的是“写什么”，只重写措辞不够
+        return "plan_outline"
     return "human_confirm_actions"
 
 
@@ -1292,6 +1529,12 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         "coverage_summary": coverage_summary,
         "verification": verification,
         "retrieval_rounds": int(state.get("retrieval_round") or 0) + 1,
+        # 报告质量闭环：大纲 + 引用校验结果
+        "outline": [
+            str(item.get("title") or "")
+            for item in ((state.get("outline") or {}).get("sections") or [])
+        ],
+        "draft_review": state.get("draft_review") or {},
         "actions": actions,
         "approved_actions": state.get("approved_actions") or [],
         "errors": errors,
@@ -1340,7 +1583,9 @@ def _node_functions() -> dict[str, Any]:
         "retrieve_knowledge": retrieve_knowledge,
         "summarize_sources": summarize_sources_node,
         "check_coverage": check_coverage,
+        "plan_outline": plan_outline,
         "draft_report": draft_report,
+        "draft_review": draft_review,
         "human_review_draft": human_review_draft,
         "human_confirm_actions": human_confirm_actions,
         "execute_actions": execute_actions,
@@ -1365,15 +1610,17 @@ def build_graph(checkpointer: Any | None = None) -> Any:
         route_after_coverage,
         {
             "search_web": "search_web",  # 覆盖不足 → 补检一轮，再走抓取/总结
-            "draft_report": "draft_report",
+            "plan_outline": "plan_outline",
         },
     )
-    builder.add_edge("draft_report", "human_review_draft")
+    builder.add_edge("plan_outline", "draft_report")
+    builder.add_edge("draft_report", "draft_review")
+    builder.add_edge("draft_review", "human_review_draft")
     builder.add_conditional_edges(
         "human_review_draft",
         route_after_review,
         {
-            "draft_report": "draft_report",
+            "plan_outline": "plan_outline",  # 修改意见 → 重排大纲再写
             "human_confirm_actions": "human_confirm_actions",
             "finalize": "finalize",
         },
@@ -1420,6 +1667,15 @@ def render_final_output(final: dict[str, Any]) -> str:
             f"部分 {(final.get('verification') or {}).get('partial', 0)} / "
             f"丢弃 {(final.get('verification') or {}).get('dropped', 0)}"
             f"（支持率 {(final.get('verification') or {}).get('support_rate', 0):.0%}）"
+        ),
+        (
+            f"- 报告结构：{' / '.join(final.get('outline') or []) or '（无大纲）'}"
+        ),
+        (
+            f"- 引用校验：{(final.get('draft_review') or {}).get('status', 'skipped')}；"
+            f"初检问题 {len((final.get('draft_review') or {}).get('issues') or [])} 个；"
+            f"重写 {(final.get('draft_review') or {}).get('rewrites', 0)} 次；"
+            f"剩余问题 {((final.get('draft_review') or {}).get('checks') or {}).get('remaining_issues', 0)} 个"
         ),
         f"- token：{(final.get('token_usage') or {}).get('total_tokens', 0)}；成本：¥{final.get('cost_cny', 0)}；LLM 模式：{final.get('llm_mode', '')}",
         f"- trace_id：{final.get('trace_id', '')}",

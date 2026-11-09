@@ -94,19 +94,25 @@ def summarize_user(question: str, sources: Iterable[dict[str, Any]]) -> str:
 DRAFT_SYSTEM = """你是一个资深的技术研究员。请根据给定的【证据列表】为用户撰写一份结构化的研究报告。
 
 【撰写要求】
-1. 先总结，后分点：报告第一段“摘要”必须用通顺的 2~3 句话，综合所有证据直接回答用户的问题
-   （例如“根据官方文档，LangGraph 主要通过实现 X 和 Y 来达到 Z 目的”），不要复述问题，也不要写“本文将……”。
+1. 先总结，后分点：报告第一段“摘要”必须用通顺的 2~3 句话，综合所有证据直接回答用户的问题。
+   写法固定为「结论 → 关键依据 → 适用边界」：第一句给判断，第二句给支撑它的依据，第三句说明
+   这个判断在什么前提下成立。不要复述问题，不要写“本文将……”，不要用“综上所述”凑句。
 2. 消除重复：若多条证据表达同一个意思，合并为一条，并在引用时写成 [S1][S2] 这种连续角标。
+   禁止连续两句表达同一意思，禁止把一条证据改写成两条并列的“发现”。
 3. 强制引用：每一个关键结论的末尾都必须跟上方括号引用，如 [S1]；引用编号只能来自证据列表，
    不得引用不存在的编号，也不得用常识补写证据之外的内容。
-4. 结构要求：使用 Markdown，且只包含以下三个小节（顺序固定）：
-   - ## 摘要：直接回答问题的 2~3 句总结。
-   - ## 关键发现：分条列点，每条必须包含 1~2 个引用角标。
-   - ## 局限与未证实：证据不足以回答的方面写“当前资料未覆盖 XX 方面”。
-5. 语气专业：使用客观、书面化的语言，禁止“今天给大家”“我们来看看”等口语表达。
-6. 只允许使用证据列表中的内容：不得补写证据之外的事实、数字、结论或 URL；正文里不要写裸 URL，
+4. 引用最小集：一条结论最多跟 2 个角标；同一句话不要堆 3 个以上来源，不同结论不要共用一个角标；
+   引用必须真的支撑它前面那句话，不要为了凑数把来源挂在无关的句尾。
+5. 结构要求：使用 Markdown，且必须包含以下四个小节（顺序固定）：
+   - ## 摘要：2~3 句，按「结论 → 依据 → 边界」写。
+   - ## 关键发现：分条列点，每条先给结论再给一句解释，结尾带 1~2 个引用角标。
+   - ## 分析与推演：每条以【推断】开头，写清依据哪几条证据、在什么前提下成立、什么情况会推翻它；
+     推演是基于证据的推理，不是原文结论。
+   - ## 局限与未证实：写清没有证据支撑的子问题、证据本身的局限（单一来源/时效/立场），不要写套话。
+6. 语气专业：使用客观、书面化的语言，禁止“今天给大家”“我们来看看”等口语表达。
+7. 只允许使用证据列表中的内容：不得补写证据之外的事实、数字、结论或 URL；正文里不要写裸 URL，
    来源由程序统一在文末列出。
-7. 不要输出“来源清单 / References”，程序会按证据自动追加。"""
+8. 不要输出“来源清单 / References”，程序会按证据自动追加。"""
 
 
 def evidence_block(evidence: Iterable[dict[str, Any]]) -> str:
@@ -121,6 +127,33 @@ def evidence_block(evidence: Iterable[dict[str, Any]]) -> str:
             f"    置信度: {item.get('confidence', 0)}"
         )
     return "\n\n".join(parts) if parts else "（无可用证据）"
+
+
+def numbered_evidence_block(
+    evidence: Iterable[dict[str, Any]],
+    ids: Iterable[int] | None = None,
+) -> str:
+    """按**全局**证据编号（S1、S2…）渲染证据块。
+
+    分节写作时每节只喂一部分证据，但报告里的角标必须是全局编号，
+    否则模型写的 [S1] 会指向错误的来源——这是“引用堆叠错误”的直接成因。
+    """
+    items = list(evidence)
+    if ids is None:
+        chosen = list(range(1, len(items) + 1))
+    else:
+        chosen = [int(value) for value in ids if 1 <= int(value) <= len(items)]
+    parts: list[str] = []
+    for index in chosen:
+        item = items[index - 1]
+        parts.append(
+            f"[S{index}] claim: {item.get('claim', '')}\n"
+            f"    类型: {item.get('kind', '事实')}\n"
+            f"    来源: {item.get('source_url', '')}\n"
+            f"    原文: {item.get('quote', '')}\n"
+            f"    置信度: {item.get('confidence', 0)}"
+        )
+    return "\n\n".join(parts) if parts else "（本节没有可用证据）"
 
 
 def draft_user(
@@ -199,4 +232,177 @@ def source_list_lines(
         else:
             lines.append(f"- [{title}]({str(src.get('url') or '').strip()})")
     return lines
+
+
+# ================================================================ 大纲规划
+OUTLINE_SYSTEM = """你是一个资深的技术研究报告主编。给定研究问题、子问题和已提取的证据卡片，
+你要设计报告大纲：决定分几节、每节回答什么、每节用哪几条证据。
+
+规则：
+1. 第一必须是「摘要」，最后必须是「分析与推演」和「局限与未证实」，中间按子问题分节（2~4 节）。
+2. 每节必须显式列出使用的证据编号（S1、S2…），只能使用给定的编号，不得虚构编号。
+3. 分节按逻辑递进排列：是什么 → 怎么做 → 有什么代价/差异 → 推演 → 局限。
+   不要按来源排序，不要一个来源一节。
+4. 若多个子问题证据不足，可以合并成一节；某个子问题完全没有证据时，不要为它单开一节，
+   而是留给「局限与未证实」。
+5. goal 用一句话写清“这一节要回答什么、写到什么程度”，不要写成标题的重复。
+
+只输出严格 JSON：
+{"sections": [{"title": "节标题", "goal": "这一节的写作目标", "evidence_ids": [1, 3], "sub_question": "对应的子问题或空串"}]}"""
+
+
+def outline_user(
+    question: str,
+    sub_questions: Iterable[str],
+    evidence: Iterable[dict[str, Any]],
+    uncovered: Iterable[str] = (),
+) -> str:
+    sub_lines = "\n".join(f"- {item}" for item in sub_questions) or "（无）"
+    cards = []
+    for idx, item in enumerate(evidence, start=1):
+        claim = _clip(item.get("claim") or item.get("quote") or "", 160)
+        kind = item.get("kind") or "事实"
+        origin = "知识库" if str(item.get("source_url") or "").startswith("kb://") else "网页"
+        cards.append(f"[S{idx}]（{kind}/{origin}）{claim}")
+    missing = "\n".join(f"- {item}" for item in uncovered) or "（无）"
+    return f"""【研究问题】：{question}
+
+【子问题】：
+{sub_lines}
+
+【没有证据覆盖的子问题】：
+{missing}
+
+【证据卡片】：
+{chr(10).join(cards) if cards else "（无证据）"}
+
+请设计大纲并输出 JSON。"""
+
+
+# ================================================================ 分节写作
+DRAFT_SECTION_SYSTEM = """你是一个资深的技术研究员，正在撰写研究报告的【某一个章节】。
+
+写作规则：
+1. 只写这一节，不要写标题、不要写其他小节、不要写来源清单。
+2. 结论先行：每段第一句就是判断，后面 1~2 句解释机制/依据，不要铺垫背景。
+3. 承接上下文：用“在此基础上”“相比之下”“其代价是”“但在……条件下”等过渡句连接上一节，
+   禁止与上一节重复同一结论。
+4. 引用最小集：每个结论结尾跟 1~2 个角标（如 [S1][S2]），一条结论最多 2 个；
+   引用必须真的支撑该句，禁止把来源挂在无关句尾，禁止使用未给出的编号。
+5. 只用证据卡片里的内容，不补写证据之外的事实、数字、URL；不要输出裸 URL。
+6. 禁止连续两句表达同一意思；不要用“综上所述”“总而言之”凑句。"""
+
+
+def draft_section_user(
+    question: str,
+    section: dict[str, Any],
+    evidence: Iterable[dict[str, Any]],
+    *,
+    previous_titles: Iterable[str] = (),
+    feedback: str = "",
+) -> str:
+    cards = numbered_evidence_block(evidence, section.get("evidence_ids") or None)
+    prior = "、".join(previous_titles) or "（这是第一节）"
+    revision = f"\n【人工修改意见】：{feedback}\n" if feedback else ""
+    return f"""【研究问题】：{question}{revision}
+
+【本节标题】：{section.get('title', '')}
+【本节写作目标】：{section.get('goal', '')}
+【已写过的前面小节】：{prior}
+
+【本节可用证据】（编号即引用角标，只能使用这些编号）：
+{cards}
+
+请只输出本节正文（Markdown，不要标题行）。"""
+
+
+DRAFT_SUMMARY_SYSTEM = """你是一个资深的技术研究员，正在写研究报告的「摘要」。
+
+规则：
+1. 恰好 3 句话，按「结论 → 关键依据 → 适用边界」排列，每句都要短（不超过 45 字）。
+2. 第一句必须是对研究问题的具体判断，点名关键机制或差异点
+   （例如“LangGraph 用 interrupt 在节点内部暂停，AutoGen 靠检查点回放状态”）。
+   禁止用“存在差异”“很重要”“值得关注”“各有优劣”这类空判断开头，也不要复述问题、不要写“本文”。
+3. 第二句给支撑判断的关键依据，必须带 1~2 个引用角标（如 [S1][S3]）。
+4. 第三句说明这个判断在什么前提下成立、或还缺什么（例如“该结论以官方文档为准，第三方实践未覆盖”）。
+5. 只能使用证据内容，不补写事实；不要输出标题、不要输出“摘要”二字、不要输出其他小节。"""
+
+
+def draft_summary_user(
+    question: str,
+    evidence: Iterable[dict[str, Any]],
+    *,
+    ids: Iterable[int] | None = None,
+    feedback: str = "",
+) -> str:
+    revision = f"\n【人工修改意见】：{feedback}\n" if feedback else ""
+    return f"""【研究问题】：{question}{revision}
+
+【证据】：
+{numbered_evidence_block(evidence, ids)}
+
+请只输出 3 句话的摘要正文。"""
+
+
+DRAFT_ANALYSIS_SYSTEM = """你是一个资深的技术研究员，正在写研究报告的「分析与推演」小节。
+
+规则：
+1. 输出 2~4 条推演，每条以【推断】开头，一条一行（Markdown 列表）。
+2. 每条必须写清三件事：依据哪几条证据（带角标）、在什么前提下成立、什么情况会推翻它。
+3. 允许做因果、对比、条件、代价推演，但必须标明这是推断而非原文结论，不得把推测写成事实。
+4. 只能用给定证据，不引入外部知识、不补写数字。
+5. 不要写“综上所述”“未来可期”之类空话；没有可推演的内容时就只输出一条，说明证据不足以推演。"""
+
+
+def draft_analysis_user(
+    question: str,
+    evidence: Iterable[dict[str, Any]],
+    *,
+    ids: Iterable[int] | None = None,
+    uncovered: Iterable[str] = (),
+    feedback: str = "",
+) -> str:
+    missing = "；".join(str(item) for item in uncovered) or "（无）"
+    revision = f"\n【人工修改意见】：{feedback}\n" if feedback else ""
+    return f"""【研究问题】：{question}{revision}
+
+【没有证据覆盖的子问题】：{missing}
+
+【全部证据】：
+{numbered_evidence_block(evidence, ids)}
+
+请只输出「分析与推演」小节的正文（不要标题行）。"""
+
+
+# ================================================================ 草稿重写（引用硬校验不过时）
+REWRITE_SYSTEM = """你是一个资深的技术报告编辑。给定一份研究报告和一批“引用/结构问题”，
+你要做**最小改动**的修订，不要重写全文。
+
+修订规则：
+1. 保留原来的小节标题与顺序，保留绝大多数原句；禁止新增、删除或重排小节。
+2. 禁止整体删掉引用角标：宁可修正一个角标，也不要让一条结论失去引用。
+   只有确认错配时才换编号（必须换成证据列表里存在的编号），一句话最多保留 2 个角标。
+3. 列表仍然是列表：不要把「关键发现」的条目改写成大段段落。
+4. 摘要问题：按「结论 → 关键依据 → 适用边界」改成 3 句，第一句直接点名机制或差异点，
+   并至少带 1 个角标。
+5. 结构问题：缺「分析与推演」就补 2~3 条以【推断】开头、带角标的推演；缺「局限与未证实」就补上。
+6. 不得新增证据之外的事实、数字或 URL；不要输出来源清单。
+7. 直接输出修订后的完整 Markdown 报告，不要解释改了什么。"""
+
+
+def rewrite_user(question: str, draft: str, issues: Iterable[dict[str, Any]]) -> str:
+    lines = []
+    for issue in issues:
+        code = issue.get("code") or "issue"
+        detail = issue.get("detail") or ""
+        lines.append(f"- [{code}] {detail}")
+    return f"""【研究问题】：{question}
+
+【待修订报告】：
+{draft}
+
+【必须修复的问题】：
+{chr(10).join(lines) if lines else "- （无）"}
+
+请输出修订后的完整报告。"""
 

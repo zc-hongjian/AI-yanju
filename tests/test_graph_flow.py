@@ -298,7 +298,7 @@ class _StubOpenAILLM:
             "mode": "openai",
         }
 
-    def draft_report(self, question: str, evidence, sources, *, feedback: str = ""):
+    def draft_report(self, question: str, evidence, sources, *, feedback: str = "", outline=None):
         real_url = sources[0]["url"]
         draft = (
             "# 报告\n\n## 关键发现\n\n"
