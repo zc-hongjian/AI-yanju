@@ -108,6 +108,11 @@ class ResearchState(TypedDict, total=False):
     # 检索轮次：0=首轮；1=已做一次补检。补检由 check_coverage 节点决定。
     retrieval_round: int
     gap_queries: list[dict[str, Any]]
+    # 本地知识库召回片段（RAG）：见 rag.search_knowledge()
+    kb_hits: list[dict[str, Any]]
+
+    # ---- 可观测性：节点级 token 用量（由 graph._instrument 写入） ----
+    node_usage: dict[str, dict[str, int]]
 
 
 def new_state(
@@ -151,4 +156,6 @@ def new_state(
         verification={},
         retrieval_round=0,
         gap_queries=[],
+        kb_hits=[],
+        node_usage={},
     )

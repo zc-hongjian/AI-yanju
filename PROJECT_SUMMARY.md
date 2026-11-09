@@ -2,7 +2,7 @@
 
 > 快照时间：2026-11-09
 > 代码位置：`D:\Build\AI-hy`
-> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」已落地，并通过 118 个测试、9 项功能验收；这批改动**尚未提交 Git**（上次提交为 `6e26124`）。
+> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」均已落地，并通过 **131 个测试**、9 项功能验收、6/6 知识库验收；这批改动**尚未提交 Git**（上次提交为 `3f39891`）。
 
 ---
 
@@ -19,22 +19,26 @@
 | 项目 | 内容 |
 | --- | --- |
 | 语言 / 运行环境 | Python 3.14.5，项目虚拟环境 `D:\Build\AI-hy\.venv` |
-| 工作流 | LangGraph（`StateGraph` + `interrupt` + `SqliteSaver` checkpointer） |
+| 工作流 | LangGraph（`StateGraph` + `interrupt` + `SqliteSaver` checkpointer，12 节点） |
 | 大模型 | OpenAI / 兼容 OpenAI 的接口（`.env` 或网页「模型设置」均可配置，网页配置只存进程内存） |
 | 工具调用 | OpenAI SDK Function Calling；网关不支持 tools 时回退 JSON 输出 |
+| 检索 | 联网搜索 + 本地知识库混合检索（BM25 + 可选向量 + RRF，`rag.py`） |
+| 可观测性 | 节点 Span（`tracing.py`）+ 模型价目表成本归因 + Web 调用链瀑布 |
 | Web | FastAPI + Uvicorn + 深色主题单页 `index.html`（NDJSON 流式日志；右上角可填 Key/Base/模型） |
 | 网页处理 | requests + BeautifulSoup + charset-normalizer |
 | 评测 | 自研 40 题数据集 + mock/真实联网/真实 LLM 三种模式 |
-| 代码规模 | `graph.py` ~1187 行、`tools.py` ~1133 行、`llm_client.py` ~811 行、`quality.py` ~361 行、`web.py` ~548 行、`persistence.py` ~166 行、`index.html` ~1803 行 |
-| 质量状态 | 118 个 pytest 用例通过；9 项功能闭环验收 9/9；40 题真实联网评测完成；会话可跨进程恢复 |
+| 代码规模 | `graph.py` ~1421 行、`tools.py` ~1113 行、`llm_client.py` ~830 行、`quality.py` ~334 行、`web.py` ~564 行、`persistence.py` ~166 行、`rag.py` ~414 行、`tracing.py` ~258 行、`index.html` ~1869 行 |
+| 质量状态 | 131 个 pytest 用例通过；9 项功能闭环验收 9/9；6/6 知识库验收；40 题真实联网评测完成；会话可跨进程恢复 |
 
 ## 3. 目录结构
 
 ```text
 AI-hy/
-├── graph.py              # LangGraph 图：11 个节点 + 条件边 + 3 处 interrupt + checkpointer
+├── graph.py              # LangGraph 图：12 个节点 + 条件边 + 3 处 interrupt + checkpointer
 ├── state.py              # ResearchState TypedDict、初始状态、质量闭环字段
 ├── quality.py            # P0：子问题覆盖度 + claim→quote 支持性校验
+├── rag.py                # P0-3：知识库分块 + BM25 + 可选向量 + RRF + 索引缓存
+├── tracing.py            # P0-2：节点 Span + 模型价目表成本归因
 ├── tools.py              # 5 个工具、JSON Schema、重试/退避/熔断、SSRF、写操作门禁
 ├── llm_client.py         # OpenAI Function Calling 客户端 + 离线启发式回退
 ├── prompts.py            # 规划 / 证据 / 报告提示词
@@ -48,7 +52,7 @@ AI-hy/
 ├── check_llm.py          # 真实 LLM 配置自检（读 .env、真实调用一次、可 --set-key）
 ├── evaluation/           # 40 题评测集、跑分、报告、验收脚本、mock fixture
 ├── data/                 # 运行期 SQLite（checkpoints / sessions，已 gitignore）
-├── tests/                # 118 个单元/集成/端到端测试
+├── tests/                # 131 个单元/集成/端到端测试
 ├── README.md             # 使用与验收文档
 ├── OPTIMIZATION.md       # 优化路线图 + P0 实施记录
 ├── PROJECT_SUMMARY.md    # 本文
@@ -59,7 +63,7 @@ AI-hy/
 └── .env.example          # 环境变量模板（真实 Key 只在被忽略的 .env）
 ```
 
-## 4. 工作流：11 个节点 + 3 次人工暂停
+## 4. 工作流：12 个节点 + 3 次人工暂停
 
 ```mermaid
 flowchart TD
@@ -175,6 +179,27 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 | 多轮追问 | `POST /api/research {"parent_thread_id": ...}` | 父会话结论摘要注入 `history_context`（≤1200 字符），规划时避免重复检索 |
 | 前端 | 右上角「历史会话」+ `?history=1` / `?session=<id>` 深链 | 演示与排障可直接打开指定会话 |
 
+### 6.7 调用链 Trace 与成本归因（P0-2，2026-11-09）
+
+| 能力 | 实现 | 作用 |
+| --- | --- | --- |
+| 节点 Span | `graph._instrument` 包住全部 12 个节点 → `logs/<trace_id>.trace.jsonl` | 节点耗时 / token / 成本 / 错误 |
+| 成本归因 | `tracing.estimate_cost` + `config/pricing.json`（最长前缀匹配） | `cost_by_node`、`cost_estimated`、`cost_price_source` 进 `final_output` |
+| 查询 API | `GET /api/trace/{trace_id}`、`GET /api/cost/summary?days=7` | 前端瀑布图；按天/按模型聚合 |
+| 前端 | 结果页「调用链 Trace」卡片（耗时条 + 每节点 token/成本） | 排障从翻日志变成看瀑布 |
+
+### 6.8 本地知识库混合检索（P0-3，2026-11-09）
+
+| 能力 | 实现 | 作用 |
+| --- | --- | --- |
+| 分块 | 按标题切段 + 800 字 / 120 重叠，保留 heading | 中文语义块完整，引用可定位到小节 |
+| 召回 | BM25（中文 bigram + 英文词） | 无 embedding 也可用 |
+| 向量 | OpenAI 兼容 `/embeddings`（默认 `text-embedding-3-small`，智谱 `embedding-3`） | 语义召回 |
+| 融合 | RRF（`Σ 1/(60+rank)`） | 两路排名合并，无需调权重 |
+| 降级 | 无 Key / 调用失败 → 纯 BM25；无文档 → 节点 skipped | 不阻塞研究主流程 |
+| 接入 | `retrieve_knowledge` 节点把命中片段转成 `kb://` 来源追加进 `fetched_pages` | 复用证据抽取 / 引用 / 校验 |
+| 验收 | `evaluation/kb_check.py`：只给 `knowledge/`、不联网 | **6/6 passed** |
+
 ## 7. 评测与验收结果
 
 ### 7.1 真实联网 40 题（离线 LLM + 真实检索，未调用付费 API）
@@ -212,7 +237,7 @@ mock 只验证流水线机制（搜索→抓取→证据→报告→引用→人
 
 - `evaluation/acceptance_check.py`：**9/9 通过**，覆盖问题拆解、联网搜索、抓取清洗、证据表、
   结构化报告、引用校验、三处人工暂停 + 写门禁、重试降级、可观测；
-- `pytest`：**118 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置接口、P0-1 持久化/多轮测试）。
+- `pytest`：**131 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮、P0-2 Trace/成本、P0-3 RAG）。
 
 ## 8. 运行方式
 
@@ -301,6 +326,9 @@ python evaluation/acceptance_check.py
 8. **工程化不足**：依赖未锁定、无 CI、搜索/抓取无缓存、搜索与抓取串行。
 9. **安全**：`.env` 含真实 Key，已在 `.gitignore` 中；网页填写的 Key 只存进程内存、页面只显示掩码，不会写回 `.env`，但不要暴露到公网。
 10. **SQLite 并发**：单写者模型，WAL 下小流量够用；不要用多个 uvicorn worker 同时跑。
+11. **知识库规模**：向量用纯 Python 余弦，约 1 万 chunk 上限；embedding 需要服务提供 `/embeddings`（DeepSeek 不提供，可换智谱 `embedding-3` 或只用 BM25）。
+12. **价目表需维护**：`config/pricing.json` 手写，模型调价后要更新；未录入模型按 env 单价估算并标记。`glm-4-flash` 等免费模型成本真实为 0。
+13. **Trace 落盘**：`logs/<trace_id>.trace.jsonl` 与 JSONL 日志同目录，长期运行需要清理策略。
 
 ## 10. 优化路线（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）
 
@@ -314,9 +342,11 @@ python evaluation/acceptance_check.py
 
 ### P1 交互与可靠性
 
-- ~~`SqliteSaver` 持久化会话、会话列表/续跑~~（P0-1 已完成，2026-11-09）；
+- ~~`SqliteSaver` 持久化会话、会话列表/续跑~~（P0-1 已完成）；
+- ~~节点级 Trace、成本归因、价目表~~（P0-2 已完成）；
+- ~~本地知识库混合检索（BM25 + 向量 + RRF）~~（P0-3 已完成）；
 - 取消运行、LLM token 流式、页面内改稿、历史报告导出；
-- 成本/时间总预算与超限降级。
+- 真实模型 + LLM-as-judge 评测；提示注入防御与审计。
 
 ### P1 工程化
 
@@ -338,16 +368,21 @@ python evaluation/acceptance_check.py
 | [OPTIMIZATION.md](OPTIMIZATION.md) | 优化路线图 + P0 实施记录/前后对比 |
 | [evaluation/eval_report.md](evaluation/eval_report.md) | 40 题评测报告（指标、失败案例、消融、P0 对比） |
 | [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) | 9 项功能闭环验收报告 |
-| [graph.py](graph.py) | 11 节点图、interrupt、条件边、finalize |
+| [graph.py](graph.py) | 12 节点图、interrupt、条件边、finalize |
 | [quality.py](quality.py) | 子问题覆盖度 + claim 支持校验 |
 | [tools.py](tools.py) | 5 工具、重试/熔断、SSRF、写门禁 |
 | [llm_client.py](llm_client.py) | LLM 客户端 + 离线回退 |
 | [prompts.py](prompts.py) | 全部提示词 |
 | [web.py](web.py) / [index.html](index.html) | Web 后端 / 单页前端 |
 | [persistence.py](persistence.py) | SQLite checkpointer + 会话索引（历史/多轮） |
+| [rag.py](rag.py) | 知识库分块 / BM25 / 向量 / RRF / 索引缓存 |
+| [tracing.py](tracing.py) | 节点 Span + 模型价目表成本归因 |
+| [knowledge/](knowledge/) | 本地知识库文档（3 篇，14 个片段） |
 | [evaluation/run_eval.py](evaluation/run_eval.py) | 评测入口 |
 | [tests/test_research_quality.py](tests/test_research_quality.py) | P0 覆盖度/补检/断言校验测试 |
 | [tests/test_persistence.py](tests/test_persistence.py) | P0-1 重启恢复/历史 API/多轮上下文测试 |
+| [tests/test_tracing.py](tests/test_tracing.py) | P0-2 价目表/Span/成本归因/API 测试 |
+| [tests/test_rag.py](tests/test_rag.py) | P0-3 分块/BM25/降级/图级知识库来源测试 |
 
 ## 12. 复现命令速查
 

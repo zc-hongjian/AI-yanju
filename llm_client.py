@@ -296,6 +296,26 @@ class LLMClient:
             )
         return self._client
 
+    def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]] | None:
+        """OpenAI 兼容 /embeddings；失败返回 None（调用方降级到 BM25）。"""
+        if self.mode != "openai" or not texts:
+            return None
+        model = (model or os.getenv("AGENT_EMBEDDING_MODEL", "text-embedding-3-small")).strip()
+        try:
+            resp = self._sdk().embeddings.create(model=model, input=texts)
+        except Exception as exc:  # noqa: BLE001 - 向量服务不可用不应中断检索
+            print(f"[研究助手] embedding 调用失败，降级 BM25：{exc}", flush=True)
+            return None
+        vectors = [list(item.embedding) for item in getattr(resp, "data", []) or []]
+        if len(vectors) != len(texts):
+            return None
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            self.usage["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+            self.usage["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
+            self.usage["calls"] += 1
+        return vectors
+
     def _chat(self, system: str, user: str, *, temperature: float = 0.2, max_tokens: int = 2200) -> str:
         if self.mode != "openai":
             raise LLMError("当前为 offline 模式，自由文本调用不可用")

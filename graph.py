@@ -1,12 +1,12 @@
-"""LangGraph 图定义：11 个节点 + 三处人工中断 + 条件边 + checkpoint。
+"""LangGraph 图定义：12 个节点 + 三处人工中断 + 条件边 + checkpoint。
 
 流程：
-receive_question → plan_research → search_web → fetch_pages → summarize_sources
-→ check_coverage ─┬─(覆盖不足)→ search_web（补检一轮）→ fetch_pages → summarize_sources → check_coverage
-                  └─(覆盖达标/无补检预算)→ draft_report
+receive_question → plan_research → search_web → fetch_pages → retrieve_knowledge
+→ summarize_sources → check_coverage ─┬─(覆盖不足)→ search_web（补检一轮）
+                                      └─(覆盖达标/无补检预算)→ draft_report
 → draft_report → human_review_draft ─┬─(通过)→ human_confirm_actions → execute_actions → finalize
-                                      ├─(修改)→ draft_report
-                                      └─(终止)→ finalize
+                                     ├─(修改)→ draft_report
+                                     └─(终止)→ finalize
 
 human_review_draft 与 human_confirm_actions 内部共调用三次 interrupt()：
 草稿审核、发邮件前确认、保存 Notion 前确认。
@@ -20,15 +20,19 @@ import os
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 import prompts
+import rag
 import tools
+import tracing
 from llm_client import get_llm
 from logging_utils import StepLog, log_stats, now_iso, summarize_text
 from quality import compute_coverage, coverage_terms, gap_queries_for, verify_evidence
@@ -93,6 +97,67 @@ def _elapsed_ms(start: float) -> int:
     return int(round((time.perf_counter() - start) * 1000))
 
 
+def _usage_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens", "calls")
+    return {key: max(0, int(after.get(key, 0)) - int(before.get(key, 0))) for key in keys}
+
+
+def _trace_recorder(state: ResearchState) -> tracing.TraceRecorder:
+    """trace 与 JSONL 日志同目录：优先跟随本次运行的 run_log_path。"""
+    trace_id = str(state.get("trace_id") or "unknown")
+    run_log = str(state.get("run_log_path") or "")
+    if run_log:
+        target = Path(run_log).with_name(f"{trace_id}.trace.jsonl")
+        return tracing.TraceRecorder(trace_id, target)
+    return tracing.TraceRecorder(trace_id)
+
+
+def _instrument(name: str, fn: Any) -> Any:
+    """给每个节点套一层：记录耗时 / token / 成本 / 错误，写入 trace 文件。
+
+    - 不改变节点语义：返回的 partial update 原样透传，只额外带 ``node_usage``；
+    - 遇到 ``interrupt()`` 抛出的 GraphBubbleUp 直接放行（暂停中的节点不记 span，
+      恢复时节点会重跑，避免同一次中断产生两条互相矛盾的记录）；
+    - 节点抛普通异常时先记 error span 再抛出，保证 trace 里能看到失败位置。
+    """
+
+    def wrapped(state: ResearchState) -> dict[str, Any]:
+        llm = get_llm()
+        before = _llm_usage(llm)
+        start = time.perf_counter()
+        try:
+            out = fn(state) or {}
+        except GraphBubbleUp:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 记录后原样抛出，由 LangGraph 处理
+            _trace_recorder(state).add_span(
+                node=name,
+                start=start,
+                latency_ms=_elapsed_ms(start),
+                status="error",
+                model=str(getattr(llm, "model", "") or ""),
+                usage=_usage_delta(_llm_usage(llm), before),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        usage = _usage_delta(_llm_usage(llm), before)
+        merged = dict(state.get("node_usage") or {})
+        merged[name] = usage
+        out = dict(out) if isinstance(out, dict) else {}
+        out["node_usage"] = merged
+        _trace_recorder(state).add_span(
+            node=name,
+            start=start,
+            latency_ms=_elapsed_ms(start),
+            status="ok",
+            model=str(getattr(llm, "model", "") or ""),
+            usage=usage,
+        )
+        return out
+
+    return wrapped
+
+
 def _llm_usage(llm: Any) -> dict[str, int]:
     """取 LLM token 用量快照；测试桩可能没有该接口，返回空字典。"""
     snapshot = getattr(llm, "usage_snapshot", None)
@@ -104,12 +169,17 @@ def _llm_usage(llm: Any) -> dict[str, int]:
         return {}
 
 
-def _sources_from_pages(pages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    return [
-        {"url": str(page.get("url") or ""), "title": str(page.get("title") or "")}
-        for page in pages
-        if page.get("url")
-    ]
+def _sources_from_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for page in pages:
+        url = str(page.get("url") or "")
+        if not url:
+            continue
+        item: dict[str, Any] = {"url": url, "title": str(page.get("title") or "")}
+        if page.get("is_kb"):
+            item["is_kb"] = True
+        sources.append(item)
+    return sources
 
 
 def _page_target(state: ResearchState) -> int:
@@ -483,7 +553,109 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     return sl.updates(fetched_pages=pages, errors=errors, retry_counts=retry_counts)
 
 
+# ================================================================ 节点 4.5：本地知识库检索（RAG）
+def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
+    """混合检索本地知识库，把命中片段作为 ``kb://`` 来源追加进 fetched_pages。
+
+    这样下游的证据抽取、引用编号、URL 白名单、支持性校验全部复用，
+    不需要为知识库单开一条证据链路。
+    """
+    sl = StepLog(state)
+    question = str(state.get("research_question") or "")
+    plan = state.get("plan") or {}
+    queries = [str((item or {}).get("query") or "").strip() for item in plan.get("queries") or []]
+    queries = [query for query in queries if query][:3] + [question]
+    limit = max(1, int(os.getenv("AGENT_KB_TOP_K", "6")))
+    pages = list(state.get("fetched_pages") or [])
+    start = time.perf_counter()
+    try:
+        hits = rag.search_knowledge(queries, k=limit)
+    except Exception as exc:  # noqa: BLE001 - 知识库故障不能拖垮研究主流程
+        sl.add(
+            node_name="retrieve_knowledge",
+            input_summary=f"{len(queries)} 条查询",
+            output_summary=f"知识库检索失败，跳过：{exc}",
+            status="error",
+            latency_ms=_elapsed_ms(start),
+            error=str(exc),
+        )
+        return sl.updates(fetched_pages=pages, kb_hits=[])
+    stats = rag.knowledge_stats()
+    if not hits:
+        sl.add(
+            node_name="retrieve_knowledge",
+            input_summary=f"{stats['documents']} 篇文档 / {stats['chunks']} 个片段",
+            output_summary="知识库为空或未命中，跳过（不影响联网检索）",
+            status="skipped",
+            latency_ms=_elapsed_ms(start),
+        )
+        return sl.updates(fetched_pages=pages, kb_hits=[])
+    existing = {str(page.get("url") or "") for page in pages}
+    added: list[dict[str, Any]] = []
+    for hit in hits:
+        url = str(hit.get("url") or "")
+        if not url or url in existing:
+            continue
+        existing.add(url)
+        heading = str(hit.get("heading") or "").strip()
+        title = str(hit.get("title") or hit.get("doc_id") or "")
+        if heading:
+            title += f" · {heading}"
+        text = str(hit.get("text") or "")
+        added.append(
+            {
+                "url": url,
+                "title": title,
+                "content": text,
+                "chars": len(text),
+                "encoding": "utf-8",
+                "is_kb": True,
+                "kb_doc_id": hit.get("doc_id"),
+                "kb_chunk_id": hit.get("chunk_id"),
+                "score": hit.get("score"),
+                "error": None,
+            }
+        )
+    sl.add(
+        node_name="retrieve_knowledge",
+        tool_name="knowledge_search",
+        input_summary=f"{len(queries)} 条查询；{stats['documents']} 篇文档",
+        output_summary=(
+            f"命中 {len(hits)} 个片段（{hits[0].get('retriever')}），新增 {len(added)} 个知识库来源"
+        ),
+        status="ok" if added else "degraded",
+        latency_ms=_elapsed_ms(start),
+    )
+    return sl.updates(fetched_pages=pages + added, kb_hits=hits)
+
+
 # ================================================================ 节点 5：总结证据
+def _kb_evidence_items(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """知识库片段直接作为“检索到的原文证据”。
+
+    网页证据走 LLM/启发式抽取；知识库片段本身已经是按相关性召回的短文本，
+    再抽句会因句子过短（表格行、列表项）而丢证据，所以整段引用、按检索分给置信度。
+    """
+    items: list[dict[str, Any]] = []
+    for page in pages:
+        text = re.sub(r"\s+", " ", str(page.get("content") or "")).strip()
+        if not text:
+            continue
+        score = float(page.get("score") or 0.0)
+        items.append(
+            {
+                "claim": text[:300],
+                "evidence_text": text[:300],
+                "source_url": str(page.get("url") or ""),
+                "quote": text[:400],
+                "source_snippet": str(page.get("title") or "知识库片段")[:120],
+                "relevance_reason": f"知识库检索命中（score={score:.3f}）",
+                "confidence": round(min(0.9, 0.5 + min(0.35, score)), 2),
+            }
+        )
+    return items
+
+
 def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
     sl = StepLog(state)
     question = str(state.get("research_question") or "")
@@ -505,72 +677,95 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
             errors=errors,
             retry_counts=retry_counts,
         )
+    web_pages = [page for page in pages if not page.get("is_kb")]
+    kb_pages = [page for page in pages if page.get("is_kb")]
     sources = [
         {
             "url": str(page.get("url") or ""),
             "title": str(page.get("title") or ""),
             "content": str(page.get("content") or ""),
         }
-        for page in pages
+        for page in web_pages
     ]
-    result = tools.call_tool("summarize_sources", {"sources": sources, "research_question": question})
-    retry_counts["summarize_sources"] = (
-        retry_counts.get("summarize_sources", 0) + max(0, result.attempts - 1)
-    )
-    if result.ok:
-        data = result.data or {}
-        raw_evidence = list(data.get("evidence") or [])
-        # P0：claim 级校验——只保留“结论能被引文支持（或部分支持）”的证据，
-        # 明显外推/无关的条目从证据列表移除并记录，避免进入报告。
-        evidence, verification = verify_evidence(raw_evidence)
-        note = str(data.get("note") or "")
-        if verification.get("dropped"):
-            note = (note + f"；已过滤 {verification['dropped']} 条未被原文支持的结论").lstrip("；")
-        status = "ok" if evidence else "degraded"
-        if not evidence:
-            errors.append(
-                {"node": "summarize_sources", "type": "no_evidence", "error": note or "未提取到可验证证据"}
+    raw_evidence: list[dict[str, Any]] = []
+    notes: list[str] = []
+    mode = "none"
+    if sources:
+        result = tools.call_tool(
+            "summarize_sources", {"sources": sources, "research_question": question}
+        )
+        retry_counts["summarize_sources"] = (
+            retry_counts.get("summarize_sources", 0) + max(0, result.attempts - 1)
+        )
+        if result.ok:
+            data = result.data or {}
+            mode = str(data.get("mode") or "")
+            raw_evidence.extend(list(data.get("evidence") or []))
+            note = str(data.get("note") or "")
+            if note:
+                notes.append(note)
+            sl.add(
+                node_name="summarize_sources",
+                tool_name="summarize_sources",
+                input_summary=f"{len(sources)} 个网页来源",
+                output_summary=(
+                    f"网页证据 {len(raw_evidence)} 条；mode={mode}；{summarize_text(note, 60)}"
+                ),
+                status="ok" if raw_evidence else "degraded",
+                retry_count=max(0, result.attempts - 1),
+                latency_ms=result.latency_ms,
+                error=None if raw_evidence else (note or "未提取到可验证证据"),
             )
+        else:
+            notes.append(f"网页证据总结失败：{result.error}")
+            errors.append(
+                {
+                    "node": "summarize_sources",
+                    "tool": "summarize_sources",
+                    "type": "tool_error",
+                    "error": result.error or "未知错误",
+                    "attempts": result.attempts,
+                }
+            )
+            sl.add(
+                node_name="summarize_sources",
+                tool_name="summarize_sources",
+                input_summary=f"{len(sources)} 个网页来源",
+                output_summary=result.summary(),
+                status="error",
+                retry_count=max(0, result.attempts - 1),
+                latency_ms=result.latency_ms,
+                error=result.error,
+            )
+    kb_items = _kb_evidence_items(kb_pages)
+    if kb_items:
+        notes.append(f"知识库证据 {len(kb_items)} 条")
+        raw_evidence.extend(kb_items)
+    # P0：claim 级校验——只保留“结论能被引文支持（或部分支持）”的证据，
+    # 明显外推/无关的条目从证据列表移除并记录，避免进入报告。
+    evidence, verification = verify_evidence(raw_evidence)
+    note = "；".join(item for item in notes if item)
+    if verification.get("dropped"):
+        note = (note + f"；已过滤 {verification['dropped']} 条未被原文支持的结论").lstrip("；")
+    if not evidence:
+        errors.append(
+            {"node": "summarize_sources", "type": "no_evidence", "error": note or "未提取到可验证证据"}
+        )
+    if sources or kb_pages:
         sl.add(
             node_name="summarize_sources",
-            tool_name="summarize_sources",
-            input_summary=f"{len(sources)} 个来源",
+            input_summary=f"{len(sources)} 个网页 + {len(kb_pages)} 个知识库片段",
             output_summary=(
                 f"{len(evidence)}/{len(raw_evidence)} 条可用证据；"
                 f"支持率={verification.get('support_rate', 0):.0%}；"
-                f"mode={data.get('mode')}；{summarize_text(note, 60)}"
+                f"知识库证据 {len(kb_items)} 条"
             ),
-            status=status,
-            retry_count=max(0, result.attempts - 1),
-            latency_ms=result.latency_ms,
+            status="ok" if evidence else "degraded",
             error=None if evidence else (note or "未提取到可验证证据"),
-        )
-    else:
-        evidence = []
-        verification = {}
-        note = f"证据总结失败：{result.error}"
-        errors.append(
-            {
-                "node": "summarize_sources",
-                "tool": "summarize_sources",
-                "type": "tool_error",
-                "error": result.error or "未知错误",
-                "attempts": result.attempts,
-            }
-        )
-        sl.add(
-            node_name="summarize_sources",
-            tool_name="summarize_sources",
-            input_summary=f"{len(sources)} 个来源",
-            output_summary=result.summary(),
-            status="error",
-            retry_count=max(0, result.attempts - 1),
-            latency_ms=result.latency_ms,
-            error=result.error,
         )
     return sl.updates(
         evidence=evidence,
-        evidence_note=note,
+        evidence_note=note or "未找到可靠来源（没有可用的网页正文或知识库片段）",
         verification=verification,
         errors=errors,
         retry_counts=retry_counts,
@@ -699,6 +894,9 @@ def _sanitize_report(
             if not 1 <= index <= len(evidence):
                 return match.group(0)
             url = str(evidence[index - 1].get("source_url") or "").strip()
+            # 知识库来源是 kb:// 伪 URL，不做成可点击链接（点击没有意义）
+            if url.startswith("kb://"):
+                return match.group(0)
             return f"[S{index}]({url})" if url and url.rstrip("/").lower() in known else match.group(0)
 
         text = re.sub(r"\[S(\d+)\](?!\()", _link_citation, text)
@@ -1033,15 +1231,30 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         for key in ("prompt_tokens", "completion_tokens", "total_tokens", "calls")
     }
     try:
-        price_in = float(os.getenv("AGENT_PRICE_INPUT_PER_MTOK", "1.0"))
-        price_out = float(os.getenv("AGENT_PRICE_OUTPUT_PER_MTOK", "4.0"))
-    except ValueError:
-        price_in, price_out = 1.0, 4.0
-    cost_cny = round(
-        token_usage["prompt_tokens"] / 1_000_000 * price_in
-        + token_usage["completion_tokens"] / 1_000_000 * price_out,
-        6,
+        model = str(getattr(get_llm(), "model", "") or "")
+    except Exception:  # noqa: BLE001
+        model = ""
+    cost_info = tracing.estimate_cost(
+        model,
+        token_usage["prompt_tokens"],
+        token_usage["completion_tokens"],
     )
+    cost_cny = round(cost_info["cost_cny"], 6)
+    node_usage = dict(state.get("node_usage") or {})
+    token_usage_by_node: dict[str, dict[str, int]] = {}
+    cost_by_node: dict[str, float] = {}
+    for node_name, usage in node_usage.items():
+        usage = dict(usage or {})
+        token_usage_by_node[node_name] = {
+            key: int(usage.get(key, 0) or 0)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "calls")
+        }
+        node_cost = tracing.estimate_cost(
+            model,
+            token_usage_by_node[node_name]["prompt_tokens"],
+            token_usage_by_node[node_name]["completion_tokens"],
+        )
+        cost_by_node[node_name] = round(node_cost["cost_cny"], 8)
     duration_ms = 0
     try:
         duration_ms = int(
@@ -1083,8 +1296,13 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         "approved_actions": state.get("approved_actions") or [],
         "errors": errors,
         "llm_mode": state.get("llm_mode", ""),
+        "model": model,
         "token_usage": token_usage,
+        "token_usage_by_node": token_usage_by_node,
         "cost_cny": cost_cny,
+        "cost_by_node": cost_by_node,
+        "cost_estimated": bool(cost_info["estimated"]),
+        "cost_price_source": cost_info["price_source"],
         "duration_ms": duration_ms,
         "trace_id": state.get("trace_id", ""),
         "started_at": state.get("started_at", ""),
@@ -1092,29 +1310,55 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         # 这里用追加自身日志后的 sl.logs 统计，保证 total 与实际条数一致。
         "log_summary": log_stats(sl.logs),
     }
+    _trace_recorder(state).add_summary(
+        {
+            "status": status,
+            "duration_ms": duration_ms,
+            "model": model,
+            "prompt_tokens": token_usage["prompt_tokens"],
+            "completion_tokens": token_usage["completion_tokens"],
+            "total_tokens": token_usage["total_tokens"],
+            "llm_calls": token_usage["calls"],
+            "cost_cny": cost_cny,
+            "cost_estimated": bool(cost_info["estimated"]),
+            "price_source": cost_info["price_source"],
+            "node_count": len(token_usage_by_node),
+            "token_usage_by_node": token_usage_by_node,
+            "cost_by_node": cost_by_node,
+        }
+    )
     return sl.updates(final_output=final_output)
 
 
 # ================================================================ 图构建
+def _node_functions() -> dict[str, Any]:
+    return {
+        "receive_question": receive_question,
+        "plan_research": plan_research,
+        "search_web": search_web_node,
+        "fetch_pages": fetch_pages_node,
+        "retrieve_knowledge": retrieve_knowledge,
+        "summarize_sources": summarize_sources_node,
+        "check_coverage": check_coverage,
+        "draft_report": draft_report,
+        "human_review_draft": human_review_draft,
+        "human_confirm_actions": human_confirm_actions,
+        "execute_actions": execute_actions,
+        "finalize": finalize,
+    }
+
+
 def build_graph(checkpointer: Any | None = None) -> Any:
     builder = StateGraph(ResearchState)
-    builder.add_node("receive_question", receive_question)
-    builder.add_node("plan_research", plan_research)
-    builder.add_node("search_web", search_web_node)
-    builder.add_node("fetch_pages", fetch_pages_node)
-    builder.add_node("summarize_sources", summarize_sources_node)
-    builder.add_node("check_coverage", check_coverage)
-    builder.add_node("draft_report", draft_report)
-    builder.add_node("human_review_draft", human_review_draft)
-    builder.add_node("human_confirm_actions", human_confirm_actions)
-    builder.add_node("execute_actions", execute_actions)
-    builder.add_node("finalize", finalize)
+    for name, fn in _node_functions().items():
+        builder.add_node(name, _instrument(name, fn))
 
     builder.add_edge(START, "receive_question")
     builder.add_edge("receive_question", "plan_research")
     builder.add_edge("plan_research", "search_web")
     builder.add_edge("search_web", "fetch_pages")
-    builder.add_edge("fetch_pages", "summarize_sources")
+    builder.add_edge("fetch_pages", "retrieve_knowledge")
+    builder.add_edge("retrieve_knowledge", "summarize_sources")
     builder.add_edge("summarize_sources", "check_coverage")
     builder.add_conditional_edges(
         "check_coverage",

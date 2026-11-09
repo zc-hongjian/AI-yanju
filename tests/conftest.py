@@ -29,6 +29,13 @@ _TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="run-", dir=str(_TMP_ROOT)))
 os.environ["AGENT_CHECKPOINT_DB"] = str(_TEST_DATA_DIR / "checkpoints.sqlite")
 os.environ["AGENT_SESSIONS_DB"] = str(_TEST_DATA_DIR / "sessions.sqlite")
 
+# 知识库隔离：默认指向空目录，避免仓库里的 knowledge/ 影响既有测试；
+# RAG 用例会自己 setenv 到临时文档目录。
+_EMPTY_KB = _TEST_DATA_DIR / "empty-kb"
+_EMPTY_KB.mkdir(parents=True, exist_ok=True)
+os.environ["AGENT_KB_DIR"] = str(_EMPTY_KB)
+os.environ["AGENT_KB_INDEX"] = str(_TEST_DATA_DIR / "kb_index.json")
+
 import llm_client  # noqa: E402
 import tools  # noqa: E402
 

@@ -14,16 +14,16 @@
 | 6 | ⑥ 引用校验：关键结论对应可点击来源 | ✅ 通过 | 关键发现 2 条，可追溯 2 条，可点击 2 条，链接均来自抓取来源 |
 | 7 | ⑦ 人工确认：暂停 / 修改 / 继续 + 写操作门禁 | ✅ 通过 | 3 次暂停=['draft_review', 'email_confirmation', 'notion_confirmation']；确认前 outbox 为空=True；写操作 2 个且成功=True；修改分支重生成 1 次并继续完成=True；写操作产物 2 个 |
 | 8 | ⑧ 失败处理：重试 + 降级 | ✅ 通过 | 可重试失败第 3 次成功（attempts=3）；404 不重试（attempts=1）；模型报错降级为模板（mode=offline_fallback） |
-| 9 | ⑨ 可观测：trace / 日志 / token / 成本 / 耗时 | ✅ 通过 | trace_id=accept-approve-919367；日志 17 条且字段齐全=True；JSONL=True；token=0；成本=¥0.0；耗时=57ms；成本口径校验=True |
+| 9 | ⑨ 可观测：trace / 日志 / token / 成本 / 耗时 | ✅ 通过 | trace_id=accept-approve-a2c412；日志 19 条且字段齐全=True；JSONL=True；token=0；成本=¥0.0；耗时=82ms；成本口径校验=True |
 
 ## 验收运行证据
 
 - 研究问题：LangGraph 的 interrupt 函数有什么作用？
-- trace_id：accept-approve-919367
-- 日志条数：17；JSONL：`D:\Build\AI-hy\evaluation\results\acceptance\approve\logs\research-accept-approve-919367.jsonl`
+- trace_id：accept-approve-a2c412
+- 日志条数：19；JSONL：`D:\Build\AI-hy\evaluation\results\acceptance\approve\logs\research-accept-approve-a2c412.jsonl`
 - 子问题：4 个
 - 证据：2 条；来源：2 个
-- token：0；成本：¥0.0；耗时：57 ms
+- token：0；成本：¥0.0；耗时：82 ms
 - 写操作：2 个成功（dry-run）
 
 ## 复现

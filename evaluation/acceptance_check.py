@@ -33,6 +33,13 @@ EVAL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(EVAL_DIR))
 
+# 本验收只看“联网检索 + 网页证据”链路：把知识库指向空目录，避免 KB 证据影响
+# “可点击来源”的判定（知识库有独立验收：evaluation/kb_check.py）。
+_EMPTY_KB = EVAL_DIR / "results" / "empty-kb"
+_EMPTY_KB.mkdir(parents=True, exist_ok=True)
+os.environ["AGENT_KB_DIR"] = str(_EMPTY_KB)
+os.environ["AGENT_KB_INDEX"] = str(EVAL_DIR / "results" / "empty-kb-index.json")
+
 from langgraph.types import Command  # noqa: E402
 
 import graph as graph_module  # noqa: E402

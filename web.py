@@ -75,6 +75,7 @@ try:
     from logging_utils import register_log_sink, unregister_log_sink
     from persistence import SessionStore, build_checkpointer, checkpoint_db_path
     from state import new_state
+    import tracing
 except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟环境）
     _bootstrap_dependency(exc)
 
@@ -459,6 +460,21 @@ def get_session(thread_id: str) -> dict[str, Any]:
         "updated_at": str((row or {}).get("updated_at") or ""),
         "recoverable": interrupt_payload is not None,
     }
+
+
+@app.get("/api/trace/{trace_id}")
+def get_trace(trace_id: str) -> dict[str, Any]:
+    """节点级调用链：耗时 / token / 成本 / 错误，按 started_at 排序。"""
+    data = tracing.read_trace(trace_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="trace 不存在（可能未开启或已被清理）")
+    return data
+
+
+@app.get("/api/cost/summary")
+def get_cost_summary(days: int = 7) -> dict[str, Any]:
+    """按天/按模型聚合 trace 成本（数据来自 logs/*.trace.jsonl）。"""
+    return tracing.aggregate_costs(days)
 
 
 @app.get("/api/config")

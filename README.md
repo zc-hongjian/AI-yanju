@@ -18,7 +18,8 @@ flowchart TD
     A[receive_question] --> B[plan_research<br/>Function Calling → search_web]
     B --> C[search_web 工具]
     C --> D[fetch_pages 工具]
-    D --> E[summarize_sources 工具]
+    D --> K[retrieve_knowledge<br/>知识库 BM25 + 向量 RRF]
+    K --> E[summarize_sources 工具<br/>网页证据 + 知识库证据]
     E --> Q{check_coverage<br/>子问题覆盖度}
     Q -- 覆盖不足 --> C
     Q -- 覆盖达标 --> F[draft_report]
@@ -55,9 +56,11 @@ flowchart TD
 
 ```
 .
-├── graph.py             # LangGraph 图：11 个节点 + 条件边 + interrupt + checkpointer
+├── graph.py             # LangGraph 图：12 个节点 + 条件边 + interrupt + checkpointer
 ├── state.py             # ResearchState TypedDict + 初始状态
 ├── quality.py           # P0 质量闭环：子问题覆盖度 + claim→quote 支持性校验
+├── rag.py               # P0-3 RAG：分块 + BM25 + 可选向量 + RRF 融合 + 索引缓存
+├── tracing.py           # P0-2 可观测性：节点 Span + 模型价目表成本归因
 ├── tools.py             # 5 个工具、JSON Schema、重试装饰逻辑、写操作门禁
 ├── text_clean.py        # 网页编码探测（charset_normalizer）+ 乱码段落清洗
 ├── prompts.py           # 全部提示词
@@ -69,15 +72,18 @@ flowchart TD
 ├── check_llm.py         # 真实大模型接入自检（读 .env + 真实调用一次）
 ├── web.py               # 网页版入口（FastAPI，复用同一张图与同一套门禁）
 ├── index.html           # 单页前端（可直接双击演示；由 web.py 托管时连真实后端）
-├── data/                # 运行期 SQLite：checkpoints.sqlite / sessions.sqlite（已 gitignore）
 ├── evaluation/          # 40 题评测集 + 跑分脚本 + eval_report.md
 │   ├── dataset.jsonl    # 测试集（简单事实 / 对比 / 时效 / 多跳，各 10 题）
 │   ├── run_eval.py      # 逐题跑图并统计指标
 │   ├── mock_web.py      # 确定性 fixture（仅测流水线机制）
 │   ├── make_report.py   # 汇总 evaluation/eval_report.md
 │   ├── acceptance_check.py # 9 项功能闭环验收，生成 FUNCTIONAL_ACCEPTANCE.md
+│   ├── kb_check.py      # P0-3 知识库验收：只给 knowledge/，问 6 个只能靠 KB 回答的问题
 │   ├── eval_report.md   # 评测报告（自动生成）
 │   └── results/         # 每次评测的 JSONL / summary / 人工抽样
+├── knowledge/           # 本地知识库（md/txt）：LangGraph HITL、评测口径、RAG 设计
+├── config/pricing.json  # 模型价目表（元/百万 token，按模型最长前缀匹配）
+├── data/                # 运行期 SQLite + 知识库索引（已 gitignore）
 ├── FUNCTIONAL_ACCEPTANCE.md # 功能验收报告（自动生成）
 ├── requirements.txt
 ├── pytest.ini
@@ -151,6 +157,12 @@ cp .env.example .env        # Windows: copy .env.example .env
 | `AGENT_WEB_PORT` | 网页版端口，默认 `8000` |
 | `AGENT_CHECKPOINT_DB` | SQLite checkpointer 路径，默认 `data/checkpoints.sqlite`（服务重启后可恢复审批中断） |
 | `AGENT_SESSIONS_DB` | 会话索引库路径，默认 `data/sessions.sqlite`（历史会话列表） |
+| `AGENT_TRACE_DIR` | 节点 Span 落盘目录，默认跟随 `AGENT_LOG_DIR`（`<trace_id>.trace.jsonl`） |
+| `AGENT_KB_DIR` | 本地知识库目录，默认 `knowledge/`；为空目录时 RAG 节点自动跳过 |
+| `AGENT_KB_INDEX` | 知识库索引缓存路径，默认 `data/kb_index.json` |
+| `AGENT_KB_TOP_K` | 每次检索返回的片段数，默认 6 |
+| `AGENT_KB_CHUNK_SIZE` / `AGENT_KB_OVERLAP` | 分块大小 / 重叠字符数，默认 800 / 120 |
+| `AGENT_EMBEDDING_MODEL` | embedding 模型名，默认 `text-embedding-3-small`；智谱用 `embedding-3`；失败自动降级 BM25 |
 
 密钥来源优先级：**网页「模型设置」保存的运行时配置**（仅进程内存，重启失效）→ `.env` → 离线模式；
 代码里没有硬编码 Key。运行时配置不会写回 `.env`。
@@ -307,6 +319,8 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 | `GET /api/sessions?limit=20` | 历史会话列表（问题、状态、更新时间、父会话） |
 | `GET /api/sessions/{thread_id}` | 加载单个会话，返回与 `/api/research` 同构的结构；中断态可直接继续审批 |
 | `GET /api/health` | 健康检查、当前 LLM 模式/模型、持久化方式 |
+| `GET /api/trace/{trace_id}` | 节点级调用链：耗时 / token / 成本 / 错误，按开始时间排序 |
+| `GET /api/cost/summary?days=7` | 按天 / 按模型聚合调用次数、token 与成本 |
 | `GET /api/config` | 当前模型配置视图（`masked_key`，不含明文 Key） |
 | `POST /api/config` | 保存页面填写的 Key / Base URL / 模型到**进程内存** |
 | `POST /api/config/test` | 用当前表单做一次最小真实调用，验证 Key 是否可用 |
@@ -367,6 +381,38 @@ curl -X POST http://127.0.0.1:8000/api/research \
 
 > 仍然是单机原型：单进程、无鉴权、无并发限流；SQLite 适合本机演示，多实例部署应换
 > `PostgresSaver` 并把长任务转到队列（见 `RESUME_ROADMAP.md` 的 P1/P2）。
+
+### 5.5.3 调用链 Trace 与成本归因（P0-2）
+
+每次运行会额外写一份 `logs/<trace_id>.trace.jsonl`：每个节点一条 `span`，最后一条 `summary`。
+结果页底部「调用链 Trace」展示节点耗时瀑布、每节点 token 与成本；未知模型会标记「估算」。
+
+- 价目表在 `config/pricing.json`，按模型名**最长前缀**匹配（`glm-4-flash-0914` 命中 `glm-4-flash`）；
+- 未命中时回退 `AGENT_PRICE_INPUT_PER_MTOK` / `AGENT_PRICE_OUTPUT_PER_MTOK`，`cost_estimated=true`；
+- `final_output` 增加 `token_usage_by_node`、`cost_by_node`、`cost_estimated`、`cost_price_source`；
+- 节点 token 之和等于运行总量（有单测断言），未知模型不会抛异常。
+
+![调用链 Trace](docs/web-ui-trace.png)
+
+### 5.5.4 本地知识库 RAG（P0-3）
+
+`knowledge/` 下的 `.md` / `.txt` 会被切成片段（800 字 / 120 重叠、保留标题路径），
+`retrieve_knowledge` 节点用 **BM25 + 可选向量 + RRF** 检索 top-6，作为 `kb://` 来源
+追加进 `fetched_pages`，与网页证据一起走同一套引用 / 校验链路。
+
+- **无 embedding Key 也能用**：BM25 始终可用；embedding 失败自动降级并打印提示；
+- 向量走 OpenAI 兼容 `/embeddings`，默认 `text-embedding-3-small`；智谱填 `AGENT_EMBEDDING_MODEL=embedding-3`；
+- 索引缓存在 `data/kb_index.json`（文档 mtime/size + 模型名，变更自动重建）；
+- 来源清单里知识库显示为 `📚 知识库 · 文档 · 小节`，不做成可点击链接（`kb://` 点击无意义）；
+- 知识库为空时节点 `skipped`，行为与之前完全一致。
+
+验收脚本（不联网、不调用付费 API，只给 `knowledge/`）：
+
+```bash
+python evaluation/kb_check.py   # 6/6 passed
+```
+
+![知识库来源与调用链](docs/web-ui-rag.png)
 
 ### 5.6 常见问题：`ModuleNotFoundError: No module named 'fastapi'`
 
@@ -502,6 +548,10 @@ pytest -q
 - 网页版：首页可访问、API 三次中断顺序正确、每次确认前 `outbox` 为空；
 - **持久化（P0-1）**：换新图实例（模拟重启）后仍能从草稿中断处 resume；`/api/sessions` 列表与详情；
   重启后 `/api/resume/stream` 不再 400（trace_id 从索引回源）；`parent_thread_id` 注入 `history_context`；
+- **调用链/成本（P0-2）**：价目表最长前缀匹配、未知模型回退 env 并标记估算；节点 span 与
+  `node_usage` 一致；`summarize` 节点 token 之和等于总量；`/api/trace` 与 `/api/cost/summary` 可用；
+- **知识库 RAG（P0-3）**：标题分块与重叠、BM25 召回、无 embedding 时降级、`kb://` 来源经
+  `_sanitize_report` 保留且不做成点击链接、图级流程里报告出现「📚 知识库」来源；
 - 模型设置：Key 保存后不落盘、不回传明文、只显示掩码；测试连接失败不泄露 Key；
   清除运行时配置后回到 `.env` / 离线模式；设置面板与深色主题存在于 `index.html`；
 - 证据完整性：编造 URL/改写引文被过滤、报告 URL 白名单清洗；无来源时报告显式声明；
@@ -515,7 +565,7 @@ pytest -q
 - **P0 质量闭环**：子问题覆盖度只把“命中主题实体与语义块”算覆盖；缺口补检受最大轮次约束；
   claim→quote 校验会丢弃明显无关的“证据”，但保留同义改写；图级测试验证补检轮会合并新页面。
 
-当前：**118 passed**。
+当前：**131 passed**。
 
 ## 10. 验收对照
 
@@ -535,6 +585,8 @@ pytest -q
 | 40 题评测 + 报告             | `evaluation/`：`run_eval.py` + `make_report.py` → `evaluation/eval_report.md`               |
 | 9 项功能闭环验收             | `evaluation/acceptance_check.py` → [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) |
 | 会话持久化 / 重启恢复（P0-1）     | `persistence.py` + `web.py`：SQLite checkpointer；`tests/test_persistence.py` |
+| 调用链 Trace / 节点成本（P0-2）  | `tracing.py` + `graph._instrument`；`/api/trace`、`/api/cost/summary`、`config/pricing.json` |
+| 知识库混合检索（P0-3）         | `rag.py` + `retrieve_knowledge`；`knowledge/`、`evaluation/kb_check.py`（6/6） |
 
 ## 11. 已知限制（MVP 边界）
 
@@ -550,6 +602,10 @@ pytest -q
 - P0 的「证据断言支持率」是规则版校验（bigram、数字、英文实体、否定词一致性），
   不是语义蕴含判断；只用于拦截明显外推，不能替代人工抽检。
 - 补检轮会提高延迟：真实评测平均 15.6s、P95 26.7s（平均 1.68 轮）；下一步用并发抓取与缓存控制。
+- 知识库向量用纯 Python 余弦计算，规模上限约 1 万 chunk；再大应换 FAISS/Chroma 或专用向量库。
+  embedding 需要服务提供 `/embeddings`（DeepSeek 不提供，可换智谱 `embedding-3` 或纯 BM25）。
+- 价目表是手写的，模型调价后需要更新 `config/pricing.json`；未录入的模型按 env 单价估算并标记。
+- `glm-4-flash` 等免费模型成本真实为 0，不是“没统计到”。
 - 只面向“研究问题 → 带来源报告 → 交付”这一条窄链路，不做通用工具编排。
 
 ## 12. 评测（40 题测试集）

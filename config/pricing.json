@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "currency": "CNY",
+  "unit": "元 / 百万 token",
+  "notes": "按模型名最长前缀匹配；未命中的模型回退 AGENT_PRICE_INPUT_PER_MTOK / AGENT_PRICE_OUTPUT_PER_MTOK，并在结果里标记 estimated=true",
+  "models": {
+    "glm-4-flash": {"in": 0.0, "out": 0.0},
+    "glm-4-air": {"in": 0.5, "out": 0.5},
+    "glm-4-plus": {"in": 5.0, "out": 5.0},
+    "glm-4": {"in": 5.0, "out": 5.0},
+    "deepseek-chat": {"in": 2.0, "out": 8.0},
+    "deepseek-reasoner": {"in": 4.0, "out": 16.0},
+    "qwen-plus": {"in": 0.8, "out": 2.0},
+    "qwen-turbo": {"in": 0.3, "out": 0.6},
+    "gpt-4o-mini": {"in": 1.1, "out": 4.4},
+    "gpt-4o": {"in": 18.0, "out": 72.0},
+    "text-embedding-3-small": {"in": 0.15, "out": 0.0}
+  }
+}

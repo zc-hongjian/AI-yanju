@@ -256,3 +256,54 @@
 - 索引表与 checkpoint 可能短暂不一致（例如索引写失败）：表现为历史列表缺一条，不影响恢复。
 - 仍无鉴权/限流，`thread_id` 即能力凭证，不要暴露公网。
 
+## 11. 实施记录（P0-2：调用链 Trace + 成本归因，2026-11-09）
+
+| 能力 | 实现 | 状态 |
+| --- | --- | --- |
+| 节点 Span | `graph._instrument` 统一包住 12 个节点，追加 `logs/<trace_id>.trace.jsonl`（`span`/`summary` 两类记录） | ✅ |
+| 节点级 token | 包装器在节点前后取 `usage_snapshot()` 差值，写入 state `node_usage` | ✅ |
+| 价目表 | `config/pricing.json` + `tracing.estimate_cost`：模型最长前缀匹配；未命中回退 env 并标记 `estimated` | ✅ |
+| 成本归因 | `finalize` 输出 `token_usage_by_node / cost_by_node / cost_estimated / cost_price_source / model` | ✅ |
+| 查询 API | `GET /api/trace/{trace_id}`、`GET /api/cost/summary?days=7`（按模型/按天聚合） | ✅ |
+| 前端 | 结果页「调用链 Trace」卡片：耗时条、每节点 token/成本、估算标记 | ✅ |
+| 测试 | 新增 `tests/test_tracing.py`（6 例）；全量 **124 passed** | ✅ |
+
+验收：用真实 LLM 跑一次完整流程（glm-4-flash）→ 12 个 span、token 6041、`retrieve_knowledge` 节点
+单独 1442 token；`token_usage_by_node` 之和等于运行总量。截图 `docs/web-ui-trace.png`。
+
+设计取舍：
+
+- **自研 trace 而不是接 Langfuse**：数据就在本机 JSONL，`/api/trace` 已够用；接 SaaS 是可选项，不是依赖。
+- **未知模型必须标记估算**：价目表不可能覆盖所有网关模型，宁可显式 `estimated=true` 也不假装精确。
+- **interrupt 节点不记 span**：`GraphBubbleUp` 直接放行；恢复时节点会重跑，避免两条互相矛盾的记录。
+
+## 12. 实施记录（P0-3：本地知识库混合检索，2026-11-09）
+
+| 能力 | 实现 | 状态 |
+| --- | --- | --- |
+| 分块 | 按 Markdown 标题切段 → 800 字滑窗 / 120 重叠，保留 heading 路径与 `kb://doc#chunk` URL | ✅ |
+| BM25 | 中文字符 bigram + 英文词，k1=1.5 / b=0.75，不引入分词依赖 | ✅ |
+| 向量 | OpenAI 兼容 `/embeddings`（可配 `AGENT_EMBEDDING_MODEL`），纯 Python 余弦 | ✅ |
+| 融合 | RRF（Σ 1/(60+rank)），BM25 与向量排名合并 | ✅ |
+| 降级 | 无 Key / 调用失败 → 纯 BM25；知识库为空 → 节点 `skipped` | ✅ |
+| 图接入 | 新节点 `retrieve_knowledge`（fetch_pages → retrieve → summarize），命中片段转 `kb://` 来源 | ✅ |
+| 证据链路 | KB 片段整段作为证据（避免短句抽取丢证据），与网页证据一起走 verify / 引用 / URL 白名单 | ✅ |
+| 引用展示 | 来源清单显示 `📚 知识库 · 文档 · 小节`，`kb://` 不做成可点击链接 | ✅ |
+| 前端 | 证据表知识库来源显示 `📚 知识库`；结果页 trace 新增 `retrieve_knowledge` 节点 | ✅ |
+| 验收 | `evaluation/kb_check.py`：只给 `knowledge/`、禁止联网，6 题全部命中并引用 | ✅ **6/6** |
+| 测试 | 新增 `tests/test_rag.py`（7 例）；全量 **131 passed** | ✅ |
+
+验收数据：`knowledge/` 3 篇文档 / 14 个 chunk；Zhipu `embedding-3` 真实向量（2048 维）索引成功，
+无 embedding 时自动降级 BM25。真实 LLM + 真实联网一次运行：来源 8（网页 2 + 知识库 6）、
+证据 10、token 6041。截图 `docs/web-ui-rag.png`。
+
+设计取舍：
+
+- **统一 `[S#]` 编号，而不是双通道 [S#]/[K#]**：复用验证过的证据抽取与引用校验链路，改动面小；
+  来源清单用 📚 标注类型，信息不丢。双编号会与现有 URL 白名单/编号重建冲突，收益不抵风险。
+- **KB 证据整段引用**：知识库片段常见表格行/列表项，句长 < 25 会被网页抽取器丢弃；
+  检索已按相关性排序，整段引用 + 检索分给置信度更合理。
+- **不引入 Chroma/FAISS**：14 个 chunk 的规模用纯 Python 余弦足够，少一个重依赖；
+  超过 1 万 chunk 再换。
+- **索引缓存**：`data/kb_index.json` 记录 mtime/size 与模型名，文档变更自动重建。
+

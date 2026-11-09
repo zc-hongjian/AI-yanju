@@ -36,6 +36,13 @@ EVAL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(EVAL_DIR))
 
+# 评测默认关闭知识库（保证与历史 eval_report 可比）；--kb 显式开启混合检索。
+if "--kb" not in sys.argv:
+    _EMPTY_KB = EVAL_DIR / "results" / "empty-kb"
+    _EMPTY_KB.mkdir(parents=True, exist_ok=True)
+    os.environ["AGENT_KB_DIR"] = str(_EMPTY_KB)
+    os.environ["AGENT_KB_INDEX"] = str(EVAL_DIR / "results" / "empty-kb-index.json")
+
 from langgraph.types import Command  # noqa: E402
 
 import graph as graph_module  # noqa: E402
@@ -66,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-link-citations", action="store_true", help="消融：关闭引用可点击化")
     parser.add_argument("--no-sub-questions", action="store_true", help="消融：关闭问题拆解")
+    parser.add_argument("--kb", action="store_true", help="启用本地知识库混合检索（默认关闭）")
     return parser.parse_args()
 
 

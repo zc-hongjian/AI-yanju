@@ -135,6 +135,9 @@ def draft_user(
 【证据列表】（编号 S1、S2…，引用时必须使用这些编号）：
 {evidence_block(evidence)}
 
+【来源类型】source_url 以 `kb://` 开头的是本地知识库片段（定义/背景/项目内结论可优先引用）；
+`https://` 开头的是本次联网抓取的网页，时效性内容优先引用网页。
+
 请按撰写要求输出 Markdown 研究报告，只输出「摘要 / 关键发现 / 局限与未证实」三个小节。"""
 
 
@@ -180,7 +183,10 @@ def source_list_lines(
     for key in order:
         labels = "".join(f"[{label}]" for label in labels_by_key[key])
         title = title_by_key.get(key) or url_by_key.get(key) or key
-        lines.append(f"- [{title}]({url_by_key[key]})（{labels}）")
+        if key.startswith("kb://"):
+            lines.append(f"- 📚 知识库 · {title}（{labels}）")
+        else:
+            lines.append(f"- [{title}]({url_by_key[key]})（{labels}）")
 
     # 抓取到、但没有被引用的页面也列出来，保证“来源清单”完整，且不伪造编号
     for src in sources:
@@ -188,6 +194,9 @@ def source_list_lines(
         if not key or key in labels_by_key:
             continue
         title = str(src.get("title") or src.get("url") or "")
-        lines.append(f"- [{title}]({str(src.get('url') or '').strip()})")
+        if key.startswith("kb://"):
+            lines.append(f"- 📚 知识库 · {title}")
+        else:
+            lines.append(f"- [{title}]({str(src.get('url') or '').strip()})")
     return lines
 
