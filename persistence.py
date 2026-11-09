@@ -1,0 +1,176 @@
+"""持久化层：SQLite checkpointer（断点恢复）+ 会话索引表（历史列表）。
+
+设计要点：
+
+1. **checkpointer** 交给 LangGraph 的 ``SqliteSaver``，每个 super-step 的状态都落盘，
+   服务重启后仍能用同一个 ``thread_id`` 从人工审批中断处 ``Command(resume=...)``。
+2. **会话索引表** 单独存一份轻量元数据（问题、状态、父会话、更新时间），
+   用于 "历史会话" 列表；不要把 UI 查询压到 checkpointer 的 checkpoint BLOB 上。
+3. 两个库默认都在 ``data/`` 下，可用环境变量覆盖（测试里指到临时目录）：
+   - ``AGENT_CHECKPOINT_DB``：checkpoints.sqlite
+   - ``AGENT_SESSIONS_DB``：sessions.sqlite
+4. 全部使用 ``check_same_thread=False`` + WAL + busy_timeout：
+   FastAPI 的同步端点跑在线程池里，连接必须跨线程可用。
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR = BASE_DIR / "data"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    thread_id       TEXT PRIMARY KEY,
+    trace_id        TEXT NOT NULL DEFAULT '',
+    question        TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'running',
+    parent_thread_id TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+"""
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _env_path(env_key: str, filename: str) -> Path:
+    raw = (os.getenv(env_key) or "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_DATA_DIR / filename
+
+
+def checkpoint_db_path() -> Path:
+    return _env_path("AGENT_CHECKPOINT_DB", "checkpoints.sqlite")
+
+
+def sessions_db_path() -> Path:
+    return _env_path("AGENT_SESSIONS_DB", "sessions.sqlite")
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def build_checkpointer(db_path: str | os.PathLike[str] | None = None) -> SqliteSaver:
+    """构造落盘到 SQLite 的 checkpointer；不传路径时读 AGENT_CHECKPOINT_DB。"""
+    path = Path(db_path) if db_path else checkpoint_db_path()
+    return SqliteSaver(_connect(path))
+
+
+class SessionStore:
+    """会话索引表：只存元数据，正文/日志仍在 checkpointer 与 JSONL 里。"""
+
+    def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
+        self.path = Path(db_path) if db_path else sessions_db_path()
+        self._lock = threading.RLock()
+        self._conn = _connect(self.path)
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
+
+    # ------------------------------------------------------------ 写
+    def upsert(
+        self,
+        thread_id: str,
+        *,
+        trace_id: str = "",
+        question: str = "",
+        status: str = "running",
+        parent_thread_id: str = "",
+    ) -> None:
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO sessions
+                    (thread_id, trace_id, question, status, parent_thread_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                    status  = excluded.status,
+                    trace_id = CASE WHEN excluded.trace_id <> '' THEN excluded.trace_id ELSE sessions.trace_id END,
+                    question = CASE WHEN excluded.question <> '' THEN excluded.question ELSE sessions.question END,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    thread_id,
+                    trace_id,
+                    question[:500],
+                    status,
+                    parent_thread_id,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+
+    def set_status(self, thread_id: str, status: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET status = ?, updated_at = ? WHERE thread_id = ?",
+                (status, _now(), thread_id),
+            )
+            self._conn.commit()
+
+    # ------------------------------------------------------------ 读
+    def get(self, thread_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT thread_id, trace_id, question, status, parent_thread_id, created_at, updated_at "
+                "FROM sessions WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def list(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT thread_id, trace_id, question, status, parent_thread_id, created_at, updated_at "
+                "FROM sessions ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def trace_id(self, thread_id: str) -> str:
+        row = self.get(thread_id)
+        return str((row or {}).get("trace_id") or "")
+
+    # ------------------------------------------------------------ 内部
+    @staticmethod
+    def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+        keys = (
+            "thread_id",
+            "trace_id",
+            "question",
+            "status",
+            "parent_thread_id",
+            "created_at",
+            "updated_at",
+        )
+        return dict(zip(keys, row))
+
+
+def get_session_store() -> SessionStore:
+    """模块级单例；测试可以直接构造 SessionStore(tmp_path) 替换。"""
+    global _STORE
+    if _STORE is None:
+        _STORE = SessionStore()
+    return _STORE
+
+
+_STORE: SessionStore | None = None

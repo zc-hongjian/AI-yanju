@@ -321,11 +321,20 @@ class LLMClient:
         return parse_json_object(self._chat(system, user, temperature=temperature))
 
     # ---------------------------------------------- 检索计划（技术搜索专家）
-    def plan_research(self, question: str, *, tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def plan_research(
+        self,
+        question: str,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        context: str = "",
+    ) -> dict[str, Any]:
         """技术搜索专家规划：先拆解 3~5 个子问题，再产出 2~3 个搜索词。
 
         提示词见 prompts.PLAN_SYSTEM / PLAN_JSON_SYSTEM：
         How 问题加技术词、框架加 site: 限定、去口语化、输出 2~3 个搜索词。
+
+        ``context`` 是上一轮研究结论摘要（多轮追问时由 web 层注入）；
+        OpenAI 模式下拼进规划提示词，离线启发式模式忽略它（保证离线评测可复现）。
         """
         if self.mode != "openai":
             return self._heuristic_plan(question)
@@ -338,7 +347,7 @@ class LLMClient:
                 model=self.model,
                 messages=[
                     {"role": "system", "content": prompts.PLAN_SYSTEM},
-                    {"role": "user", "content": prompts.plan_user(question)},
+                    {"role": "user", "content": prompts.plan_user(question, context)},
                 ],
                 tools=tools or None,
                 tool_choice="auto" if tools else "none",
@@ -354,7 +363,7 @@ class LLMClient:
             errors.append(f"Function Calling 规划失败：{exc}")
         if not queries:
             try:
-                queries = self._json_plan(question)
+                queries = self._json_plan(question, context)
                 if not queries:
                     errors.append("JSON 规划没有返回搜索词")
             except Exception as exc:  # noqa: BLE001
@@ -390,11 +399,11 @@ class LLMClient:
             queries.append({"query": query, "max_results": _clamp_int(args.get("max_results"), 5, 1, 10)})
         return queries
 
-    def _json_plan(self, question: str) -> list[dict[str, Any]]:
+    def _json_plan(self, question: str, context: str = "") -> list[dict[str, Any]]:
         """纯 JSON 输出模式的备用路径（兼容不支持 tools 的 OpenAI 网关）。"""
         text = self._chat(
             prompts.PLAN_JSON_SYSTEM,
-            prompts.plan_json_user(question),
+            prompts.plan_json_user(question, context),
             temperature=0.1,
             max_tokens=400,
         )

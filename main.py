@@ -18,6 +18,7 @@ from langgraph.types import Command
 from graph import build_graph, render_final_output
 from human_review import build_resume
 from logging_utils import render_log_summary
+from persistence import build_checkpointer
 from state import new_state
 
 
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     auto = args.auto or os.getenv("AGENT_AUTO_APPROVE", "0").strip().lower() in {"1", "true", "yes"}
     trace_id = uuid.uuid4().hex[:8]
     state = new_state(question, trace_id=trace_id, log_dir=args.log_dir)
-    graph = build_graph()
+    graph = build_graph(build_checkpointer())
     thread_id = args.thread_id or f"research-{trace_id}"
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_value = build_resume(payload, auto=auto)
             result = graph.invoke(Command(resume=resume_value), config)
     except KeyboardInterrupt:
-        print("\n[中断] 已停止。本次运行使用内存 checkpointer，进程退出后无法恢复。")
+        print("\n[中断] 已停止。状态已写入 SQLite checkpointer，可用同一 --thread-id 再次运行查看。")
         print(f"已写日志：{state.get('run_log_path')}")
         return 130
     except Exception as exc:  # noqa: BLE001 - CLI 顶层兜底，给出可定位信息

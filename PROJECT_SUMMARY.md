@@ -1,8 +1,8 @@
 # 研究助手项目总结（PROJECT_SUMMARY.md）
 
-> 快照时间：2026-11-07
+> 快照时间：2026-11-09
 > 代码位置：`D:\Build\AI-hy`
-> 当前状态：P0「研究质量闭环」与网页「模型设置」已落地，并通过 113 个测试、9 项功能验收；这批改动**尚未提交 Git**（上次提交为 `d595b1c`）。
+> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」已落地，并通过 118 个测试、9 项功能验收；这批改动**尚未提交 Git**（上次提交为 `6e26124`）。
 
 ---
 
@@ -19,14 +19,14 @@
 | 项目 | 内容 |
 | --- | --- |
 | 语言 / 运行环境 | Python 3.14.5，项目虚拟环境 `D:\Build\AI-hy\.venv` |
-| 工作流 | LangGraph（`StateGraph` + `interrupt` + `InMemorySaver` checkpointer） |
+| 工作流 | LangGraph（`StateGraph` + `interrupt` + `SqliteSaver` checkpointer） |
 | 大模型 | OpenAI / 兼容 OpenAI 的接口（`.env` 或网页「模型设置」均可配置，网页配置只存进程内存） |
 | 工具调用 | OpenAI SDK Function Calling；网关不支持 tools 时回退 JSON 输出 |
 | Web | FastAPI + Uvicorn + 深色主题单页 `index.html`（NDJSON 流式日志；右上角可填 Key/Base/模型） |
 | 网页处理 | requests + BeautifulSoup + charset-normalizer |
 | 评测 | 自研 40 题数据集 + mock/真实联网/真实 LLM 三种模式 |
-| 代码规模 | `graph.py` ~1213 行、`tools.py` ~1133 行、`llm_client.py` ~806 行、`quality.py` ~361 行、`web.py` ~397 行、`index.html` ~1687 行 |
-| 质量状态 | 113 个 pytest 用例通过；9 项功能闭环验收 9/9；40 题真实联网评测完成 |
+| 代码规模 | `graph.py` ~1187 行、`tools.py` ~1133 行、`llm_client.py` ~811 行、`quality.py` ~361 行、`web.py` ~548 行、`persistence.py` ~166 行、`index.html` ~1803 行 |
+| 质量状态 | 118 个 pytest 用例通过；9 项功能闭环验收 9/9；40 题真实联网评测完成；会话可跨进程恢复 |
 
 ## 3. 目录结构
 
@@ -43,10 +43,12 @@ AI-hy/
 ├── human_review.py       # 命令行人工确认（草稿 / 写操作参数）
 ├── main.py               # CLI 入口（interrupt → resume 循环）
 ├── web.py                # Web 入口（FastAPI，复用同一张图与门禁）
+├── persistence.py        # 持久化：SQLite checkpointer + 会话索引表（历史/多轮）
 ├── index.html            # 单页前端：可直接双击演示，也可由 web.py 托管连真实后端
 ├── check_llm.py          # 真实 LLM 配置自检（读 .env、真实调用一次、可 --set-key）
 ├── evaluation/           # 40 题评测集、跑分、报告、验收脚本、mock fixture
-├── tests/                # 113 个单元/集成/端到端测试
+├── data/                 # 运行期 SQLite（checkpoints / sessions，已 gitignore）
+├── tests/                # 118 个单元/集成/端到端测试
 ├── README.md             # 使用与验收文档
 ├── OPTIMIZATION.md       # 优化路线图 + P0 实施记录
 ├── PROJECT_SUMMARY.md    # 本文
@@ -99,7 +101,7 @@ flowchart TD
 | 存 Notion 前 | `save: true/false` | 同意且标题非空才执行；否则跳过 |
 
 图编译时挂 checkpointer，`invoke` 返回 `__interrupt__`，用 `Command(resume=...)` 恢复。
-**注意**：当前用 `InMemorySaver`，进程重启后未完成会话会丢失。
+当前挂的是 **`SqliteSaver`**（`data/checkpoints.sqlite`）：服务重启后仍能从同一个人工审批中断处继续。
 
 ## 5. 五个工具
 
@@ -163,6 +165,16 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 | 断言校验 | `quality.verify_evidence()` | claim→quote 支持性判定：supported / partial / unsupported |
 | 质量指标 | `final_output` + `run_eval` | 覆盖率、支持率、检索轮次进入结果与评测报告 |
 
+### 6.6 会话持久化与多轮（P0-1，2026-11-09）
+
+| 能力 | 实现 | 作用 |
+| --- | --- | --- |
+| 断点恢复 | `persistence.build_checkpointer()` → `SqliteSaver` | 服务重启后从草稿/邮件/Notion 中断处 `resume` |
+| 会话索引 | `SessionStore`（`data/sessions.sqlite`） | 历史会话列表、状态、父会话、更新时间 |
+| 历史 API | `GET /api/sessions`、`GET /api/sessions/{thread_id}` | 页面「历史会话」抽屉，中断态点击「继续审批」 |
+| 多轮追问 | `POST /api/research {"parent_thread_id": ...}` | 父会话结论摘要注入 `history_context`（≤1200 字符），规划时避免重复检索 |
+| 前端 | 右上角「历史会话」+ `?history=1` / `?session=<id>` 深链 | 演示与排障可直接打开指定会话 |
+
 ## 7. 评测与验收结果
 
 ### 7.1 真实联网 40 题（离线 LLM + 真实检索，未调用付费 API）
@@ -200,7 +212,7 @@ mock 只验证流水线机制（搜索→抓取→证据→报告→引用→人
 
 - `evaluation/acceptance_check.py`：**9/9 通过**，覆盖问题拆解、联网搜索、抓取清洗、证据表、
   结构化报告、引用校验、三处人工暂停 + 写门禁、重试降级、可观测；
-- `pytest`：**113 passed**（含 P0 覆盖度/补检/断言校验，以及 Web 模型配置接口测试）。
+- `pytest`：**118 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置接口、P0-1 持久化/多轮测试）。
 
 ## 8. 运行方式
 
@@ -278,16 +290,17 @@ python evaluation/acceptance_check.py
 
 ## 9. 已知限制与风险
 
-1. **会话不持久**：`InMemorySaver` + 进程内 `_SESSIONS`，服务重启/刷新后未完成会话丢失。
+1. **会话仍受单机限制**：SQLite checkpointer 只适合单进程；多 worker/多实例需换 `PostgresSaver`，且没有鉴权与限流。
 2. **写操作默认 dry-run**：未配置 SMTP/Notion 时只落盘模拟，不会真实发送/同步。
 3. **检索质量是瓶颈**：真实评测子问题覆盖率 51.2%，主要卡在对比题只抓到一方、站点 403/521/JS 空页。
 4. **断言支持率是规则代理**：99.4% 不代表语义蕴含，不能替代人工审计；高抽象改写可能被误判。
 5. **延迟上升**：补检让平均延迟 15.6s、P95 26.7s，接近 30s 目标线。
 6. **真实 LLM 未全量评测**：40 题仍是离线 LLM（token/成本为 0）；真实模型只做过 1 题 smoke
    （`llm_smoke`），接入后需重跑。
-7. **单机单用户**：无登录、无历史报告库、无多用户隔离。
+7. **单机单用户**：无登录、无多用户隔离；历史会话有列表与恢复，但没有独立报告库与检索。
 8. **工程化不足**：依赖未锁定、无 CI、搜索/抓取无缓存、搜索与抓取串行。
 9. **安全**：`.env` 含真实 Key，已在 `.gitignore` 中；网页填写的 Key 只存进程内存、页面只显示掩码，不会写回 `.env`，但不要暴露到公网。
+10. **SQLite 并发**：单写者模型，WAL 下小流量够用；不要用多个 uvicorn worker 同时跑。
 
 ## 10. 优化路线（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）
 
@@ -301,8 +314,8 @@ python evaluation/acceptance_check.py
 
 ### P1 交互与可靠性
 
-- `SqliteSaver` 持久化会话、会话列表/续跑；
-- 取消运行、LLM token 流式、页面内改稿、历史报告；
+- ~~`SqliteSaver` 持久化会话、会话列表/续跑~~（P0-1 已完成，2026-11-09）；
+- 取消运行、LLM token 流式、页面内改稿、历史报告导出；
 - 成本/时间总预算与超限降级。
 
 ### P1 工程化
@@ -331,8 +344,10 @@ python evaluation/acceptance_check.py
 | [llm_client.py](llm_client.py) | LLM 客户端 + 离线回退 |
 | [prompts.py](prompts.py) | 全部提示词 |
 | [web.py](web.py) / [index.html](index.html) | Web 后端 / 单页前端 |
+| [persistence.py](persistence.py) | SQLite checkpointer + 会话索引（历史/多轮） |
 | [evaluation/run_eval.py](evaluation/run_eval.py) | 评测入口 |
 | [tests/test_research_quality.py](tests/test_research_quality.py) | P0 覆盖度/补检/断言校验测试 |
+| [tests/test_persistence.py](tests/test_persistence.py) | P0-1 重启恢复/历史 API/多轮上下文测试 |
 
 ## 12. 复现命令速查
 

@@ -9,14 +9,17 @@
 项目自带的 .venv；找不到时给出可直接复制的安装命令。
 
 API：
-    POST /api/research          {"question": "..."}            -> 第一次中断或最终结果
+    POST /api/research          {"question": "...", "parent_thread_id": "可选"}  -> 第一次中断或最终结果
     POST /api/resume            {"thread_id": "...", "value": {...}} -> 下一次中断或最终结果
     POST /api/research/stream   同上，但用 NDJSON 流式返回实时日志 + 最终结果
     POST /api/resume/stream     同上
+    GET  /api/sessions          历史会话列表（默认 20 条）
+    GET  /api/sessions/{id}     加载单个会话（含中断载荷，可用于“继续审批”）
     GET  /api/health
 
-会话状态存放在 LangGraph checkpointer（InMemorySaver）里，按 thread_id 隔离；
-进程重启后未完成的会话会丢失。
+会话状态存放在 SQLite checkpointer（``data/checkpoints.sqlite``）里，按 thread_id 隔离；
+进程重启后从同一 thread_id 继续 ``Command(resume=...)`` 即可恢复人工审批中断。
+会话索引（问题、状态、更新时间）单独存 ``data/sessions.sqlite``，供历史列表查询。
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -69,6 +73,7 @@ try:
     from llm_client import LLMClient, get_llm
     import llm_client
     from logging_utils import register_log_sink, unregister_log_sink
+    from persistence import SessionStore, build_checkpointer, checkpoint_db_path
     from state import new_state
 except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟环境）
     _bootstrap_dependency(exc)
@@ -83,8 +88,15 @@ _STARTUP_ENV = {key: os.getenv(key) for key in _LLM_ENV_KEYS}
 _RUNTIME_CONFIG: dict[str, str] | None = None
 _CONFIG_LOCK = threading.Lock()
 
-app = FastAPI(title="LangGraph 研究助手", version="0.2.0")
-GRAPH = build_graph()
+app = FastAPI(title="LangGraph 研究助手", version="0.3.0")
+# 持久化：SQLite checkpointer（服务重启后仍能从人工审批中断处恢复）
+CHECKPOINTER = build_checkpointer()
+GRAPH = build_graph(CHECKPOINTER)
+try:
+    _STORE: SessionStore | None = SessionStore()
+except Exception as exc:  # noqa: BLE001 - 索引库失败不应拖垮研究主流程
+    _STORE = None
+    print(f"[研究助手] 会话索引不可用（单次研究不受影响）：{exc}", flush=True)
 try:
     _startup_llm = get_llm()
     print(
@@ -94,11 +106,14 @@ try:
     )
 except Exception as exc:  # noqa: BLE001 - 启动日志失败不影响服务
     print(f"[研究助手] LLM 配置读取失败：{exc}", flush=True)
-_SESSIONS: dict[str, str] = {}  # thread_id -> trace_id，流式 resume 需要靠它订阅日志
+# thread_id -> trace_id 的进程内缓存；重启后从 _STORE 回源，流式 resume 仍可用
+_SESSIONS: dict[str, str] = {}
 
 
 class ResearchRequest(BaseModel):
     question: str
+    # 多轮追问：可选，指向上一轮的 thread_id；会把其结论摘要注入本轮规划
+    parent_thread_id: str = ""
 
 
 class ResumeRequest(BaseModel):
@@ -207,24 +222,129 @@ def _safe_llm_error(exc: Exception, key: str) -> str:
     return text[:500]
 
 
+def _session_upsert(
+    thread_id: str,
+    trace_id: str,
+    question: str,
+    status: str,
+    parent_thread_id: str = "",
+) -> None:
+    """写会话索引；索引失败只影响“历史列表”，不能让研究流程失败。"""
+    if _STORE is None:
+        return
+    try:
+        _STORE.upsert(
+            thread_id,
+            trace_id=trace_id,
+            question=question,
+            status=status,
+            parent_thread_id=parent_thread_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[研究助手] 会话索引写入失败：{exc}", flush=True)
+
+
+def _session_set_status(thread_id: str, status: str) -> None:
+    if _STORE is None:
+        return
+    try:
+        _STORE.set_status(thread_id, status)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[研究助手] 会话状态更新失败：{exc}", flush=True)
+
+
+def _session_get(thread_id: str) -> dict[str, Any] | None:
+    if _STORE is None:
+        return None
+    try:
+        return _STORE.get(thread_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _session_list(limit: int = 20) -> list[dict[str, Any]]:
+    if _STORE is None:
+        return []
+    try:
+        return _STORE.list(limit)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _trace_for(thread_id: str) -> str:
+    """取 trace_id：进程内缓存优先，重启后回源会话索引。"""
+    trace = _SESSIONS.get(thread_id)
+    if trace:
+        return trace
+    if _STORE is None:
+        return ""
+    try:
+        return _STORE.trace_id(thread_id)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _snapshot_interrupt(snapshot: Any) -> Any:
+    """从 checkpointer 的 StateSnapshot 里取出等待中的人工确认载荷。"""
+    for task in getattr(snapshot, "tasks", ()) or ():
+        for interrupt_obj in getattr(task, "interrupts", ()) or ():
+            return getattr(interrupt_obj, "value", None)
+    return None
+
+
+def _history_context(parent_thread_id: str) -> str:
+    """把父会话的结论压成一段短上下文，供本轮规划“避免重复检索”。"""
+    parent = (parent_thread_id or "").strip()
+    if not parent:
+        return ""
+    try:
+        snapshot = GRAPH.get_state({"configurable": {"thread_id": parent}})
+    except Exception:  # noqa: BLE001 - 父会话不存在时静默降级为单轮
+        return ""
+    values = dict(getattr(snapshot, "values", {}) or {})
+    final = values.get("final_output") or {}
+    question = str(final.get("research_question") or values.get("research_question") or "").strip()
+    report = str(final.get("report") or values.get("draft_report") or "").strip()
+    sub_questions = list(final.get("sub_questions") or (values.get("plan") or {}).get("sub_questions") or [])
+    parts: list[str] = []
+    if question:
+        parts.append(f"上一轮问题：{question[:160]}")
+    if sub_questions:
+        parts.append("已覆盖子问题：" + "；".join(str(item)[:60] for item in sub_questions[:5]))
+    if report:
+        cut = report.find("## 来源")
+        body = report[:cut] if cut > 0 else report
+        parts.append("上一轮结论摘要：" + re.sub(r"\s+", " ", body).strip()[:600])
+    return "\n".join(parts).strip()
+
+
 def _pack(thread_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    """把图的一次 invoke 结果包装成前端需要的形状。"""
+    """把图的一次 invoke 结果包装成前端需要的形状，并同步会话状态。"""
     interrupts = result.get("__interrupt__") or []
     payload = interrupts[0].value if interrupts else None
+    status = "interrupt" if payload is not None else "completed"
+    _session_set_status(thread_id, status)
     return {
         "thread_id": thread_id,
-        "status": "interrupt" if payload is not None else "completed",
+        "status": status,
         "interrupt": payload,
         "logs": result.get("logs") or [],
         "final_output": result.get("final_output") or None,
     }
 
 
-def _start_run(question: str) -> tuple[str, str, Any, dict[str, Any]]:
+def _start_run(question: str, parent_thread_id: str = "") -> tuple[str, str, Any, dict[str, Any]]:
     trace_id = uuid.uuid4().hex[:8]
     thread_id = f"web-{trace_id}"
+    parent = (parent_thread_id or "").strip()
     _SESSIONS[thread_id] = trace_id
-    state = new_state(question, trace_id=trace_id)
+    state = new_state(
+        question,
+        trace_id=trace_id,
+        history_context=_history_context(parent),
+        parent_thread_id=parent,
+    )
+    _session_upsert(thread_id, trace_id, question, "running", parent)
     config = {"configurable": {"thread_id": thread_id}}
     return trace_id, thread_id, state, config
 
@@ -252,6 +372,7 @@ def _stream_events(
             outcome["result"] = runner()
         except Exception as exc:  # noqa: BLE001 - 转成流里的 error 事件
             outcome["error"] = f"{type(exc).__name__}: {exc}"
+            _session_set_status(thread_id, "failed")
         finally:
             events.put({"type": "__done__"})
 
@@ -284,9 +405,59 @@ def health() -> dict[str, Any]:
     llm = get_llm()
     return {
         "status": "ok",
+        "version": app.version,
+        "persistence": "sqlite",
+        "checkpoint_db": str(checkpoint_db_path()),
         "llm_mode": llm.mode,
         "model": llm.model,
         "configured": bool(llm.api_key),
+    }
+
+
+@app.get("/api/sessions")
+def list_sessions(limit: int = 20) -> dict[str, Any]:
+    """历史会话列表：问题、状态、更新时间；重启后仍可查（索引落 SQLite）。"""
+    rows = _session_list(limit)
+    return {"sessions": rows, "count": len(rows), "enabled": _STORE is not None}
+
+
+@app.get("/api/sessions/{thread_id}")
+def get_session(thread_id: str) -> dict[str, Any]:
+    """加载单个会话：返回与 /api/research 同构的结果，可直接渲染“继续审批”。"""
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    row = _session_get(tid)
+    snapshot: Any = None
+    try:
+        snapshot = GRAPH.get_state({"configurable": {"thread_id": tid}})
+    except Exception:  # noqa: BLE001 - 会话不存在或 checkpoint 损坏时回退到索引表
+        snapshot = None
+    values = dict(getattr(snapshot, "values", {}) or {})
+    if not values and row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    interrupt_payload = _snapshot_interrupt(snapshot)
+    final_output = values.get("final_output") or None
+    if interrupt_payload is not None:
+        status = "interrupt"
+    elif final_output:
+        status = "completed"
+    else:
+        status = str((row or {}).get("status") or "unknown")
+    return {
+        "thread_id": tid,
+        "status": status,
+        "interrupt": interrupt_payload,
+        "logs": values.get("logs") or [],
+        "final_output": final_output,
+        "question": str((row or {}).get("question") or values.get("research_question") or ""),
+        "trace_id": str((row or {}).get("trace_id") or values.get("trace_id") or ""),
+        "parent_thread_id": str(
+            (row or {}).get("parent_thread_id") or values.get("parent_thread_id") or ""
+        ),
+        "created_at": str((row or {}).get("created_at") or ""),
+        "updated_at": str((row or {}).get("updated_at") or ""),
+        "recoverable": interrupt_payload is not None,
     }
 
 
@@ -331,10 +502,11 @@ def start_research(req: ResearchRequest) -> dict[str, Any]:
     question = (req.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="研究问题不能为空")
-    trace_id, thread_id, state, config = _start_run(question)
+    trace_id, thread_id, state, config = _start_run(question, req.parent_thread_id)
     try:
         result = GRAPH.invoke(state, config)
     except Exception as exc:  # noqa: BLE001 - 接口层统一转成 500，前端展示
+        _session_set_status(thread_id, "failed")
         raise HTTPException(status_code=500, detail=f"研究流程失败：{exc}") from exc
     return _pack(thread_id, result)
 
@@ -344,7 +516,7 @@ def start_research_stream(req: ResearchRequest) -> StreamingResponse:
     question = (req.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="研究问题不能为空")
-    trace_id, thread_id, state, config = _start_run(question)
+    trace_id, thread_id, state, config = _start_run(question, req.parent_thread_id)
     return StreamingResponse(
         _stream_events(trace_id, thread_id, lambda: GRAPH.invoke(state, config)),
         media_type="application/x-ndjson",
@@ -360,6 +532,7 @@ def resume(req: ResumeRequest) -> dict[str, Any]:
     try:
         result = GRAPH.invoke(Command(resume=req.value), config)
     except Exception as exc:  # noqa: BLE001
+        _session_set_status(thread_id, "failed")
         raise HTTPException(status_code=500, detail=f"恢复执行失败：{exc}") from exc
     return _pack(thread_id, result)
 
@@ -369,11 +542,12 @@ def resume_stream(req: ResumeRequest) -> StreamingResponse:
     thread_id = (req.thread_id or "").strip()
     if not thread_id:
         raise HTTPException(status_code=400, detail="缺少 thread_id")
-    trace_id = _SESSIONS.get(thread_id)
+    # 重启后 _SESSIONS 为空，但会话索引与 SQLite checkpoint 仍在 → 从索引回源
+    trace_id = _trace_for(thread_id)
     if not trace_id:
         raise HTTPException(
             status_code=400,
-            detail="会话不存在或服务已重启，请重新开始研究",
+            detail="会话不存在（可能已过期或从未创建）",
         )
     config = {"configurable": {"thread_id": thread_id}}
     value = req.value

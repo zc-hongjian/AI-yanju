@@ -88,6 +88,9 @@ class ResearchState(TypedDict, total=False):
     # ---- 运行期辅助字段 ----
     trace_id: str
     started_at: str
+    # 多轮追问：上一轮结论摘要（由 web 层从父会话读取后注入，长度受控）
+    history_context: str
+    parent_thread_id: str
     llm_mode: str
     llm_usage_baseline: dict[str, int]
     revision_count: int
@@ -112,6 +115,8 @@ def new_state(
     *,
     trace_id: str | None = None,
     log_dir: str | os.PathLike[str] | None = None,
+    history_context: str = "",
+    parent_thread_id: str = "",
 ) -> ResearchState:
     """构造一次运行的初始状态。trace_id 用于把日志串成一条链路。"""
     trace_id = trace_id or uuid.uuid4().hex[:8]
@@ -133,6 +138,8 @@ def new_state(
         final_output={},
         trace_id=trace_id,
         started_at=now_iso(),
+        history_context=(history_context or "").strip()[:1200],
+        parent_thread_id=(parent_thread_id or "").strip(),
         llm_mode="",
         revision_count=0,
         step_counter=0,

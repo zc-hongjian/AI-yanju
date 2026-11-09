@@ -21,8 +21,12 @@ PLAN_SYSTEM = """你是一个专业的技术搜索专家。用户提出一个研
 提交方式：先输出子问题 JSON，再调用 search_web 工具 2~3 次，每次 query 填一个关键词组合；不要只在正文里写搜索词。"""
 
 
-def plan_user(question: str) -> str:
-    return f"""用户问题：{question}
+def plan_user(question: str, context: str = "") -> str:
+    prior = f"""
+
+上一轮研究上下文（用户正在追问，只用于避免重复检索，不要逐条复述）：
+{context.strip()}""" if context.strip() else ""
+    return f"""用户问题：{question}{prior}
 
 请先拆解出 3~5 个子问题（JSON），再按规则生成 2~3 个搜索关键词组合，并通过 search_web 工具提交。"""
 
@@ -37,8 +41,12 @@ PLAN_JSON_SYSTEM = """你是一个专业的技术搜索专家。用户提出一�
 只输出一个 JSON 字符串数组，例如 ["搜索词1", "搜索词2"]，不要输出任何其他内容。"""
 
 
-def plan_json_user(question: str) -> str:
-    return f"""用户问题：{question}
+def plan_json_user(question: str, context: str = "") -> str:
+    prior = f"""
+
+上一轮研究上下文（用户正在追问，仅用于避免重复检索）：
+{context.strip()}""" if context.strip() else ""
+    return f"""用户问题：{question}{prior}
 
 请直接输出 2~3 个搜索词的 JSON 数组。"""
 

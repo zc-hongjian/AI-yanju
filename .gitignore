@@ -8,6 +8,7 @@ __pycache__/
 # 运行产物
 logs/
 outbox/
+data/
 *.log
 
 # 评测运行产物（体积大、可复现；保留 eval_report.md 与 dataset.jsonl）

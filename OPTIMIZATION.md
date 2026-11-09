@@ -218,3 +218,41 @@
 - 规则 verifier 会误杀高度抽象的合法改写（score < 0.25 才丢弃，风险已压低），但不能替代语义判断。
 - `real_p0` 仍是离线 LLM；接入真实模型后 token/成本/延迟要重跑，support rate 也可能变化。
 
+## 10. 实施记录（P0-1：会话持久化与多轮，2026-11-09）
+
+目标：解决「服务重启后审批中断全丢、没有历史会话、无法追问」三个产品化缺口，
+并在不改图结构的前提下完成（`build_graph(checkpointer=...)` 接口早已预留）。
+
+| 能力 | 实现 | 状态 |
+| --- | --- | --- |
+| 断点恢复 | `persistence.build_checkpointer()` → `langgraph-checkpoint-sqlite` 的 `SqliteSaver`，`data/checkpoints.sqlite`（WAL + `check_same_thread=False`） | ✅ |
+| 会话索引 | `SessionStore`（`data/sessions.sqlite`）：thread_id / trace_id / question / status / parent_thread_id / 时间 | ✅ |
+| 历史 API | `GET /api/sessions?limit=20`、`GET /api/sessions/{thread_id}`（返回与 `/api/research` 同构结构，含中断载荷） | ✅ |
+| 重启后流式恢复 | `_trace_for()` 优先内存缓存、缺失时从索引回源；`/api/resume/stream` 不再因重启 400 | ✅ |
+| 多轮追问 | `POST /api/research {"parent_thread_id": ...}`：父会话结论摘要（问题/子问题/报告 ≤1200 字符）→ `history_context` → 规划提示词 | ✅ |
+| 前端 | 右上角「历史会话」抽屉（状态徽标 + 一键继续审批）；`?history=1`、`?session=<thread_id>` 深链 | ✅ |
+| 测试 | 新增 `tests/test_persistence.py`（5 例）；全量 **118 passed** | ✅ |
+
+### 10.1 跨进程验收（实际执行）
+
+1. 独立脚本用假网页跑出 `draft_review` 中断，写入 SQLite（模拟"另一台进程/上一次运行"）；
+2. 启动全新的 `web.py`（内存里没有任何会话缓存）；
+3. `GET /api/sessions` 列出该会话、`GET /api/sessions/{id}` 能还原 15 条日志与草稿；
+4. `POST /api/resume` 直接返回 `email_confirmation` —— **证明重启后可继续审批**。
+
+截图：`docs/web-ui-history.png`（历史抽屉）、`docs/web-ui-recover.png`（恢复后的草稿审核页）。
+
+### 10.2 设计取舍
+
+- **不依赖 checkpointer 的 `list()` 列举会话**：不同版本 API 形态不稳定，且要从 checkpoint BLOB 里反解问题/状态；独立索引表更稳、更快。
+- **索引写失败不阻断研究**：`_session_*` 全部 try/except，索引挂了只影响"历史列表"。
+- **多轮只注入摘要，不做长期记忆**：1200 字符上限，避免 token 膨胀与"把上一轮错误带进下一轮"。
+- **保持同步调用链**：没有顺手 async 化，避免与现有 11 节点、工具重试逻辑连锁改动；并发/异步属于 P2。
+- **SQLite 而非 Postgres**：本机单进程演示够用，`build_checkpointer()` 已是单点替换位。
+
+### 10.3 已知风险
+
+- SQLite 单写者：不要起多个 uvicorn worker；多实例部署要换 `PostgresSaver`。
+- 索引表与 checkpoint 可能短暂不一致（例如索引写失败）：表现为历史列表缺一条，不影响恢复。
+- 仍无鉴权/限流，`thread_id` 即能力凭证，不要暴露公网。
+

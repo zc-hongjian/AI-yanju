@@ -176,10 +176,14 @@ def receive_question(state: ResearchState) -> dict[str, Any]:
     if not question:
         raise ValueError("research_question 不能为空")
     llm = get_llm()
+    history = str(state.get("history_context") or "").strip()
+    origin = "承接上一轮追问" if history else "首轮研究"
     sl.add(
         node_name="receive_question",
         input_summary=question,
-        output_summary=f"初始化完成；LLM 模式={llm.mode}；trace={state.get('trace_id')}",
+        output_summary=(
+            f"初始化完成（{origin}）；LLM 模式={llm.mode}；trace={state.get('trace_id')}"
+        ),
         status="ok",
     )
     return sl.updates(
@@ -194,12 +198,13 @@ def plan_research(state: ResearchState) -> dict[str, Any]:
     sl = StepLog(state)
     question = str(state.get("research_question") or "")
     llm = get_llm()
+    history = str(state.get("history_context") or "").strip()
     errors = list(state.get("errors") or [])
     search_schema = [s for s in tools.TOOL_SCHEMAS if s["function"]["name"] == "search_web"]
     start = time.perf_counter()
     status, error = "ok", None
     try:
-        plan = llm.plan_research(question, tools=search_schema)
+        plan = llm.plan_research(question, tools=search_schema, context=history)
     except Exception as exc:  # noqa: BLE001 - 规划失败要降级而不是崩
         plan = {
             "queries": [{"query": question, "max_results": 5}],

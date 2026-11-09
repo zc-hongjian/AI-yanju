@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,14 @@ os.environ["AGENT_RETRY_BASE_DELAY"] = "0.5"
 os.environ["AGENT_TOOL_MAX_ATTEMPTS"] = "3"
 for _key in ("OPENAI_API_KEY", "SMTP_HOST", "NOTION_TOKEN", "DEFAULT_EMAIL_TO"):
     os.environ.pop(_key, None)
+
+# 持久化库隔离：web.py 在 import 时就建 checkpointer，必须在此之前指到临时目录，
+# 否则测试会把 data/*.sqlite 写进仓库。放 .tmp/ 下（已被 .gitignore 忽略）。
+_TMP_ROOT = ROOT / ".tmp" / "pytest-data"
+_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+_TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="run-", dir=str(_TMP_ROOT)))
+os.environ["AGENT_CHECKPOINT_DB"] = str(_TEST_DATA_DIR / "checkpoints.sqlite")
+os.environ["AGENT_SESSIONS_DB"] = str(_TEST_DATA_DIR / "sessions.sqlite")
 
 import llm_client  # noqa: E402
 import tools  # noqa: E402

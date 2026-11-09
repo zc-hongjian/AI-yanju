@@ -35,8 +35,8 @@ flowchart TD
   claim→quote 支持性校验，明显外推/无关的“证据”会被过滤并记录。
 - **三处 `interrupt()`**：草稿审核、发邮件前、存 Notion 前。后两处都在 `human_confirm_actions`
   节点内顺序执行，各自产生一次独立的暂停/恢复，因此邮件与 Notion 可以分别同意或拒绝。
-- 图编译时挂 `InMemorySaver` checkpointer，`invoke` 返回 `__interrupt__`，
-  `main.py` 收集人工输入后用 `Command(resume=...)` 恢复。
+- 图编译时挂 **SQLite checkpointer**（`persistence.build_checkpointer()`，库文件 `data/checkpoints.sqlite`），
+  `invoke` 返回 `__interrupt__`，`Command(resume=...)` 恢复；进程重启后仍能继续。
 - 草稿审核支持「通过 / 修改（重新生成，最多 2 轮）/ 终止」。
 - 只有 `execute_actions` 会以 `human_approved=True` 调用写工具，且仅针对人工同意的动作。
 
@@ -64,10 +64,12 @@ flowchart TD
 ├── logging_utils.py     # 结构化日志（state + JSONL）
 ├── human_review.py      # 命令行人工确认（草稿 / 写操作参数）
 ├── llm_client.py        # OpenAI Function Calling 客户端 + 离线启发式回退
+├── persistence.py       # 持久化：SQLite checkpointer（断点恢复）+ 会话索引表
 ├── main.py              # 命令行入口（中断-恢复循环）
 ├── check_llm.py         # 真实大模型接入自检（读 .env + 真实调用一次）
 ├── web.py               # 网页版入口（FastAPI，复用同一张图与同一套门禁）
 ├── index.html           # 单页前端（可直接双击演示；由 web.py 托管时连真实后端）
+├── data/                # 运行期 SQLite：checkpoints.sqlite / sessions.sqlite（已 gitignore）
 ├── evaluation/          # 40 题评测集 + 跑分脚本 + eval_report.md
 │   ├── dataset.jsonl    # 测试集（简单事实 / 对比 / 时效 / 多跳，各 10 题）
 │   ├── run_eval.py      # 逐题跑图并统计指标
@@ -91,7 +93,8 @@ flowchart TD
     ├── test_encoding.py          # GBK/UTF-16 探测、乱码段落丢弃、整页乱码确定性失败
     ├── test_draft_template.py    # 三段式报告、[S#] 引用、可点击化、来源清单重建
     ├── test_planning.py          # 检索规划、3~5 个子问题、JSON 解析
-    └── test_research_quality.py  # P0：覆盖度、缺口补检、claim 支持校验
+    ├── test_research_quality.py  # P0：覆盖度、缺口补检、claim 支持校验
+    └── test_persistence.py       # P0-1：重启恢复、历史会话 API、多轮上下文
 ```
 
 ## 3. 安装
@@ -146,6 +149,8 @@ cp .env.example .env        # Windows: copy .env.example .env
 | `AGENT_LOG_DIR` | JSONL 日志目录，默认 `logs` |
 | `AGENT_AUTO_APPROVE` | `1` 时跳过交互自动批准（仅演示/CI） |
 | `AGENT_WEB_PORT` | 网页版端口，默认 `8000` |
+| `AGENT_CHECKPOINT_DB` | SQLite checkpointer 路径，默认 `data/checkpoints.sqlite`（服务重启后可恢复审批中断） |
+| `AGENT_SESSIONS_DB` | 会话索引库路径，默认 `data/sessions.sqlite`（历史会话列表） |
 
 密钥来源优先级：**网页「模型设置」保存的运行时配置**（仅进程内存，重启失效）→ `.env` → 离线模式；
 代码里没有硬编码 Key。运行时配置不会写回 `.env`。
@@ -296,10 +301,12 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 
 | 接口 | 说明 |
 | --- | --- |
-| `POST /api/research` `{"question": "..."}` | 启动一次研究，返回第一次中断或最终结果 |
+| `POST /api/research` `{"question": "...", "parent_thread_id": "可选"}` | 启动一次研究，返回第一次中断或最终结果；带 `parent_thread_id` 即多轮追问 |
 | `POST /api/resume` `{"thread_id": "...", "value": {...}}` | 提交人工确认，返回下一次中断或最终结果 |
 | `POST /api/research/stream` / `POST /api/resume/stream` | 同上，但用 NDJSON **实时推送日志**，最后一行是 `result` 或 `error` |
-| `GET /api/health` | 健康检查、当前 LLM 模式/模型 |
+| `GET /api/sessions?limit=20` | 历史会话列表（问题、状态、更新时间、父会话） |
+| `GET /api/sessions/{thread_id}` | 加载单个会话，返回与 `/api/research` 同构的结构；中断态可直接继续审批 |
+| `GET /api/health` | 健康检查、当前 LLM 模式/模型、持久化方式 |
 | `GET /api/config` | 当前模型配置视图（`masked_key`，不含明文 Key） |
 | `POST /api/config` | 保存页面填写的 Key / Base URL / 模型到**进程内存** |
 | `POST /api/config/test` | 用当前表单做一次最小真实调用，验证 Key 是否可用 |
@@ -326,8 +333,40 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 
 ![深色主题网页版](docs/web-ui-dark.png)
 
-会话按 `thread_id` 存在 `InMemorySaver` 中，进程重启后未完成会话会丢失；默认只监听
-`127.0.0.1`，没有鉴权，不要直接暴露到公网。
+### 5.5.2 会话持久化与多轮追问（P0-1）
+
+会话状态落在 **SQLite checkpointer**（`data/checkpoints.sqlite`），不再随进程退出丢失：
+
+- 到「草稿 / 邮件 / Notion」任一个人工暂停点时，状态已经写盘；
+- 关掉 `web.py` 再启动，用同一个 `thread_id` 调 `POST /api/resume`（或页面里点“继续审批”）即可从暂停点继续；
+- `GET /api/sessions` 列出历史会话（问题、状态、更新时间），`GET /api/sessions/{thread_id}` 加载详情；
+- 会话索引单独存 `data/sessions.sqlite`，索引写失败只影响历史列表，不影响研究主流程。
+
+多轮追问：`POST /api/research` 带 `parent_thread_id` 时，会读取父会话的结论摘要（问题 + 子问题 + 报告正文，
+截断到 1200 字符）注入本轮 `history_context`，规划阶段据此避免重复检索；响应里的会话行会记录 `parent_thread_id`。
+
+![历史会话抽屉](docs/web-ui-history.png)
+
+从历史会话点「继续审批」后，页面会还原完整日志与草稿审核面板（会话由上一个进程写入）：
+
+![恢复后的待审批会话](docs/web-ui-recover.png)
+
+深链：`?history=1` 直接打开历史面板，`?session=<thread_id>` 直接加载某个会话（便于演示和排障）。
+
+```bash
+# 重启后继续一个待审批会话（thread_id 来自 /api/sessions）
+curl -X POST http://127.0.0.1:8000/api/resume \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id": "web-xxxx", "value": {"decision": "approve", "comment": ""}}'
+
+# 基于上一轮结论追问
+curl -X POST http://127.0.0.1:8000/api/research \
+  -H "Content-Type: application/json" \
+  -d '{"question": "那 checkpointer 具体解决什么问题？", "parent_thread_id": "web-xxxx"}'
+```
+
+> 仍然是单机原型：单进程、无鉴权、无并发限流；SQLite 适合本机演示，多实例部署应换
+> `PostgresSaver` 并把长任务转到队列（见 `RESUME_ROADMAP.md` 的 P1/P2）。
 
 ### 5.6 常见问题：`ModuleNotFoundError: No module named 'fastapi'`
 
@@ -461,6 +500,8 @@ pytest -q
 - 重试：第 3 次成功（`attempts=3`，退避 `[0.5, 1.0]`）；3 次全失败返回结构化错误；
 - 写操作门禁：未确认直接拒绝、参数里伪造 `human_approved` 无效、确认后才产生 dry-run 文件；
 - 网页版：首页可访问、API 三次中断顺序正确、每次确认前 `outbox` 为空；
+- **持久化（P0-1）**：换新图实例（模拟重启）后仍能从草稿中断处 resume；`/api/sessions` 列表与详情；
+  重启后 `/api/resume/stream` 不再 400（trace_id 从索引回源）；`parent_thread_id` 注入 `history_context`；
 - 模型设置：Key 保存后不落盘、不回传明文、只显示掩码；测试连接失败不泄露 Key；
   清除运行时配置后回到 `.env` / 离线模式；设置面板与深色主题存在于 `index.html`；
 - 证据完整性：编造 URL/改写引文被过滤、报告 URL 白名单清洗；无来源时报告显式声明；
@@ -474,7 +515,7 @@ pytest -q
 - **P0 质量闭环**：子问题覆盖度只把“命中主题实体与语义块”算覆盖；缺口补检受最大轮次约束；
   claim→quote 校验会丢弃明显无关的“证据”，但保留同义改写；图级测试验证补检轮会合并新页面。
 
-当前：**113 passed**。
+当前：**118 passed**。
 
 ## 10. 验收对照
 
@@ -493,11 +534,13 @@ pytest -q
 | 可观测（token/成本/耗时）        | `final_output` 含 `token_usage / cost_cny / duration_ms / log_summary`                       |
 | 40 题评测 + 报告             | `evaluation/`：`run_eval.py` + `make_report.py` → `evaluation/eval_report.md`               |
 | 9 项功能闭环验收             | `evaluation/acceptance_check.py` → [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) |
+| 会话持久化 / 重启恢复（P0-1）     | `persistence.py` + `web.py`：SQLite checkpointer；`tests/test_persistence.py` |
 
 ## 11. 已知限制（MVP 边界）
 
-- checkpointer 使用 `InMemorySaver`：同一进程内可按 `thread_id` 恢复，进程退出后中断状态丢失；
-  生产可换 `SqliteSaver`/`PostgresSaver`（需同样保证节点可重入）。
+- 持久化到 SQLite 单文件（`data/checkpoints.sqlite`）：单进程可用，多 worker / 多实例部署需要换
+  `PostgresSaver`；会话索引表只存元数据，正文仍在 checkpoint 与 JSONL 里。
+- 没有鉴权与限流，默认只监听 `127.0.0.1`，不要暴露到公网；多用户隔离仅靠 `thread_id`。
 - 未配置 SMTP/Notion 时写操作是 dry-run（落盘模拟），不会真正发送/同步。
 - 搜索按 Bing / 360 / DuckDuckGo / Wikipedia 回退，可能被限流或区域不可达；已做提供方回退与重试。
 - 编码探测是启发式的：极短页面、或正文本身在源头就是乱码（例如被上游转码坏掉的镜像站）无法还原，
