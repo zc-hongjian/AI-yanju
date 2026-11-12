@@ -383,6 +383,54 @@
   }
   .log-table td { border-bottom: 1px solid rgba(148, 163, 184, .08); color: #c3d2e5; }
   .log-table tr:hover td { background: rgba(34, 211, 238, .035); }
+  /* ---------- 执行进度：分段节点进度条 + 可收起 ---------- */
+  .progress-head { gap: 10px; }
+  .progress-head h2 { flex: none; }
+  .collapse-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(34, 211, 238, .07); color: #9fd8e6;
+    border: 1px solid rgba(34, 211, 238, .24); border-radius: 999px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+    transition: background .18s ease, color .18s ease, border-color .18s ease;
+  }
+  .collapse-btn:hover { color: #ecfeff; border-color: rgba(34, 211, 238, .55); background: rgba(34, 211, 238, .14); }
+  .collapse-btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; }
+  .collapse-btn .chev { display: inline-block; transition: transform .18s ease; }
+  #progress-card.collapsed .collapse-btn .chev { transform: rotate(-90deg); }
+  .stage-row { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
+  .stage-emoji {
+    font-size: 26px; line-height: 1; flex: none;
+    filter: drop-shadow(0 0 10px rgba(34, 211, 238, .35));
+    animation: emoji-bob 2.4s ease-in-out infinite;
+  }
+  @keyframes emoji-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  .stage-copy-wrap { flex: 1; min-width: 0; }
+  .stage-copy { color: #dbeafe; font-size: 13.5px; }
+  .seg-meta { color: #7f93ae; font-size: 12px; margin-top: 3px; }
+  .stage-percent { font-size: 20px; font-weight: 700; color: #67e8f9; flex: none; }
+  .seg-bar { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; margin: 0 0 14px; }
+  .seg-cell {
+    height: 8px; border-radius: 999px; background: rgba(148, 163, 184, .14);
+    transition: background .25s ease, box-shadow .25s ease;
+  }
+  .seg-cell.done { background: linear-gradient(90deg, #22d3ee, #8b5cf6); }
+  .seg-cell.active {
+    background: linear-gradient(90deg, #22d3ee, #8b5cf6);
+    position: relative; overflow: hidden;
+    box-shadow: 0 0 12px rgba(34, 211, 238, .45);
+  }
+  .seg-cell.active::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .8), transparent);
+    transform: translateX(-100%);
+    animation: seg-shine 1.3s ease-in-out infinite;
+  }
+  @keyframes seg-shine { to { transform: translateX(100%); } }
+  .seg-cell:hover { box-shadow: 0 0 10px rgba(34, 211, 238, .35); }
+  @media (prefers-reduced-motion: reduce) {
+    .stage-emoji, .seg-cell.active::after { animation: none; }
+    .seg-cell, .collapse-btn, .collapse-btn .chev { transition: none; }
+  }
   .log-error { color: #fda4af; }
   .state.ok { color: var(--green); background: rgba(52, 211, 153, .08); border-color: rgba(52, 211, 153, .24); }
   .state.degraded { color: var(--amber); background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .24); }
@@ -585,17 +633,32 @@
   <div id="error" class="alert" hidden></div>
 
   <section class="card" id="progress-card" hidden>
-    <div class="card-head">
+    <div class="card-head progress-head">
       <h2>执行进度</h2>
       <span class="muted" id="progress-text">处理中…</span>
+      <button type="button" class="collapse-btn" id="progress-toggle" aria-expanded="true" aria-controls="progress-body">
+        <span id="progress-toggle-text">收起</span><span class="chev" aria-hidden="true">▾</span>
+      </button>
     </div>
-    <div class="log-wrap">
-      <table class="log-table">
-        <thead>
-          <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
-        </thead>
-        <tbody id="log-body"></tbody>
-      </table>
+    <div id="progress-body">
+      <div class="stage-row">
+        <span class="stage-emoji" id="stage-emoji" aria-hidden="true">🫡</span>
+        <div class="stage-copy-wrap">
+          <div class="stage-copy" id="stage-copy">收到问题，开始热身…</div>
+          <div class="seg-meta mono" id="seg-meta">等待开始 · 共 0 条日志</div>
+        </div>
+        <span class="stage-percent mono" id="stage-percent">0%</span>
+      </div>
+      <div class="seg-bar" id="seg-bar" role="progressbar" aria-valuemin="0" aria-valuemax="14"
+        aria-valuenow="0" aria-label="研究流程进度"></div>
+      <div class="log-wrap">
+        <table class="log-table">
+          <thead>
+            <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -796,6 +859,112 @@
     return NODE_LABELS[name] || name || "";
   }
 
+  // ---------- 执行进度：14 个节点分段进度条 + 阶段表情/文案 ----------
+  const NODE_ORDER = [
+    "receive_question", "plan_research", "search_web", "fetch_pages", "retrieve_knowledge",
+    "summarize_sources", "check_coverage", "plan_outline", "draft_report", "draft_review",
+    "human_review_draft", "human_confirm_actions", "execute_actions", "finalize",
+  ];
+  // 每个阶段一句轻松文案（[emoji, 文案]）
+  const STAGE_FUN = {
+    receive_question: ["🫡", "收到问题，开始热身…"],
+    plan_research: ["🧭", "拆问题、想搜索词，先把地图画出来…"],
+    search_web: ["🔍", "到处翻资料，能搜到的先都捞回来…"],
+    fetch_pages: ["📄", "打开网页，把广告和导航栏抖干净…"],
+    retrieve_knowledge: ["📚", "顺手翻翻自己的小本本（本地知识库）…"],
+    summarize_sources: ["🧪", "逐句提取证据，顺便验一下真伪…"],
+    check_coverage: ["🧮", "数一数还有哪些问题没人回答…"],
+    plan_outline: ["🗂", "把证据摆一桌，先排个大纲…"],
+    draft_report: ["✍️", "开始码报告，摘要要先说人话…"],
+    draft_review: ["🔎", "逐句核对引用，谁也别想蒙混过关…"],
+    human_review_draft: ["🙋", "草稿好了，等你过目（暂停中）…"],
+    human_confirm_actions: ["✅", "发不发邮件、存不存 Notion，等你点头…"],
+    execute_actions: ["🚀", "执行你批准的操作…"],
+    finalize: ["🎉", "收尾，把数据整理成一份结果…"],
+  };
+  const STAGE_TOTAL = NODE_ORDER.length;
+  let progressMaxIndex = -1;       // 已到达的最远节点下标（只增不减，补检回环不倒退）
+  let progressFailed = false;      // 本次运行是否失败（进度条文案要显示“失败”）
+  let progressCollapsed = false;   // 手动收起状态（默认展开）
+  let progressState = { node: "", steps: 0, percent: 0 };
+
+  function buildSegments() {
+    const bar = $("seg-bar");
+    if (!bar || bar.children.length) return;
+    NODE_ORDER.forEach((node) => {
+      const cell = document.createElement("span");
+      cell.className = "seg-cell";
+      cell.title = nodeLabel(node);
+      bar.appendChild(cell);
+    });
+  }
+
+  function paintProgress() {
+    const bar = $("seg-bar");
+    if (!bar) return;
+    const cells = bar.children;
+    const done = progressMaxIndex >= STAGE_TOTAL - 1;
+    for (let i = 0; i < cells.length; i += 1) {
+      let cls = "seg-cell";
+      if (i < progressMaxIndex || done) cls += " done";
+      else if (i === progressMaxIndex) cls += " active";
+      if (cells[i].className !== cls) cells[i].className = cls;
+    }
+    const stage = STAGE_FUN[progressState.node] || ["⏳", "准备开工…"];
+    $("stage-emoji").textContent = stage[0];
+    $("stage-copy").textContent = stage[1];
+    $("stage-percent").textContent = progressState.percent + "%";
+    const step = Math.max(0, progressMaxIndex + 1);
+    $("seg-meta").textContent = step
+      ? "第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
+      : "等待开始 · 共 0 条日志";
+    bar.setAttribute("aria-valuenow", String(step));
+    $("progress-text").textContent = progressHeader();
+  }
+
+  function progressHeader(seconds) {
+    if (progressFailed) return "失败 · " + (progressState.percent || 0) + "%";
+    const percent = progressState.percent;
+    const node = progressState.node ? nodeLabel(progressState.node) : "准备中";
+    const tail = seconds == null ? "" : " · " + seconds + "s";
+    return percent + "% · " + node + tail;
+  }
+
+  function updateProgressRail(logs) {
+    logs = logs || [];
+    let index = -1;
+    logs.forEach((entry) => {
+      const pos = entry ? NODE_ORDER.indexOf(entry.node_name) : -1;
+      if (pos > index) index = pos;
+    });
+    if (index >= 0) progressMaxIndex = Math.max(progressMaxIndex, index);
+    const last = logs.length ? logs[logs.length - 1] : null;
+    const currentNode = last && NODE_ORDER.indexOf(last.node_name) >= 0
+      ? last.node_name
+      : (progressMaxIndex >= 0 ? NODE_ORDER[progressMaxIndex] : "");
+    progressState = {
+      node: currentNode,
+      steps: logs.length,
+      percent: progressMaxIndex < 0 ? 0 : Math.min(100, Math.round(((progressMaxIndex + 1) / STAGE_TOTAL) * 100)),
+    };
+    paintProgress();
+  }
+
+  function resetProgress() {
+    progressMaxIndex = -1;
+    progressFailed = false;
+    progressState = { node: "", steps: 0, percent: 0 };
+    paintProgress();
+  }
+
+  function setProgressCollapsed(collapsed) {
+    progressCollapsed = collapsed;
+    $("progress-body").hidden = collapsed;
+    $("progress-card").classList.toggle("collapsed", collapsed);
+    $("progress-toggle-text").textContent = collapsed ? "展开" : "收起";
+    $("progress-toggle").setAttribute("aria-expanded", String(!collapsed));
+  }
+
   function escapeHtml(text) {
     return String(text == null ? "" : text).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -925,26 +1094,20 @@
 
   function setBusy(value, label) {
     busy = value;
-    document.querySelectorAll("button").forEach((btn) => { btn.disabled = value; });
+    document.querySelectorAll("button:not(#progress-toggle)").forEach((btn) => { btn.disabled = value; });
     if (value) {
       $("progress-card").hidden = false;
       const started = Date.now();
-      $("progress-text").textContent = label || "处理中…";
+      if (!latestLogs.length) $("progress-text").textContent = (label || "处理中…") + " · 0%";
       clearInterval(timer);
       timer = setInterval(() => {
         const seconds = Math.round((Date.now() - started) / 1000);
-        if (latestLogs.length) {
-          const last = latestLogs[latestLogs.length - 1];
-          $("progress-text").textContent =
-            "已完成 " + latestLogs.length + " 步 · 最近：" + nodeLabel(last.node_name) +
-            "（" + last.status + "） · " + seconds + "s";
-        } else {
-          $("progress-text").textContent = (label || "处理中…") + " " + seconds + "s";
-        }
+        $("progress-text").textContent = progressHeader(seconds);
       }, 500);
     } else {
       clearInterval(timer);
       timer = null;
+      paintProgress();  // 收尾时按最终日志刷新，去掉计时尾巴
     }
   }
 
@@ -1002,14 +1165,11 @@
     if (latestLogs.some((item) => item.step_id === entry.step_id)) return;
     latestLogs.push(entry);
     renderLogs("log-body", latestLogs);
+    updateProgressRail(latestLogs);
   }
 
   function updateProgress(data) {
-    const logs = data.logs || [];
-    if (logs.length) {
-      const last = logs[logs.length - 1];
-      $("progress-text").textContent = "已完成 " + logs.length + " 步 · 最近：" + nodeLabel(last.node_name) + "（" + last.status + "）";
-    }
+    updateProgressRail((data && data.logs) || latestLogs);
   }
 
   // ---------- 历史会话：从后端 SQLite 读取，中断态可直接恢复 ----------
@@ -1269,7 +1429,7 @@
     $("log-body").innerHTML = "";
     $("final-log-body").innerHTML = "";
     $("thread-pill").hidden = true;
-    $("progress-text").textContent = "等待开始";
+    resetProgress();
     $("question").value = "";
     $("revise-box").hidden = true;
     demoStage = null;
@@ -1286,6 +1446,7 @@
     if (demoMode) { startDemoResearch(question); return; }
     threadId = null;
     latestLogs = [];
+    resetProgress();
     $("log-body").innerHTML = "";
     $("final-log-body").innerHTML = "";
     hidePanels();
@@ -1295,7 +1456,8 @@
       render(data);
     } catch (err) {
       showError(err.message || String(err));
-      $("progress-text").textContent = "失败";
+      progressFailed = true;
+      paintProgress();
     } finally {
       setBusy(false);
     }
@@ -1362,7 +1524,7 @@
       timestamp: "",
     });
     renderLogs("log-body", latestLogs);
-    $("progress-text").textContent = "演示进度：" + latestLogs.length + " 步";
+    updateProgressRail(latestLogs);
   }
 
   function demoDraftMarkdown() {
@@ -1416,6 +1578,7 @@
     demoNotionSaved = false;
     threadId = "demo-session";
     latestLogs = [];
+    resetProgress();
     currentInterrupt = null;
     currentFinal = null;
     $("log-body").innerHTML = "";
@@ -1856,11 +2019,17 @@
     $("question").focus();
   });
 
+  // 进度条：先生成 14 个分段格子，再绑定收起/展开（默认展开）
+  buildSegments();
+  resetProgress();
+  $("progress-toggle").addEventListener("click", () => setProgressCollapsed(!progressCollapsed));
+
   // 页面加载时显示 LLM 模式；file:// 或后端不可用时自动进入静态演示模式
-  // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始
+  // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始；?collapse=1 执行进度默认收起（深链/截图用）
   const urlParams = new URLSearchParams(location.search);
   const prefillQuestion = urlParams.get("q");
   if (prefillQuestion) $("question").value = prefillQuestion;
+  if (urlParams.get("collapse") === "1") setProgressCollapsed(true);
   const autoStart = urlParams.get("autostart") === "1";
   const openSettingsOnLoad = urlParams.get("settings") === "1";
   const openHistoryOnLoad = urlParams.get("history") === "1";

@@ -125,3 +125,24 @@ def test_index_contains_masked_settings_panel():
     assert 'id="api-key"' in html and 'type="password"' in html
     assert "后端进程内存" in html
     assert "theme-dark" in html
+
+
+def test_index_progress_ui_has_segments_and_collapse_toggle():
+    html = (Path(__file__).resolve().parents[1] / "index.html").read_text(encoding="utf-8")
+    assert 'id="seg-bar"' in html, "执行进度需要分段进度条容器"
+    assert 'id="progress-body"' in html and 'id="progress-toggle"' in html, "执行进度需要可收纳"
+    assert 'id="stage-copy"' in html and 'id="stage-percent"' in html, "需要阶段文案与百分比"
+    assert 'aria-valuenow' in html, "进度条要有无障碍语义"
+
+
+def test_progress_node_order_matches_graph_nodes():
+    """前端进度条的 14 个节点必须与图节点顺序一致，否则百分比会算错。"""
+    import re
+
+    from graph import _node_functions
+
+    html = (Path(__file__).resolve().parents[1] / "index.html").read_text(encoding="utf-8")
+    block = re.search(r"const NODE_ORDER = \[(.*?)\];", html, re.S)
+    assert block, "index.html 里应有 NODE_ORDER 常量"
+    names = re.findall(r'"([a-z_]+)"', block.group(1))
+    assert names == list(_node_functions())
