@@ -146,3 +146,16 @@ def test_progress_node_order_matches_graph_nodes():
     assert block, "index.html 里应有 NODE_ORDER 常量"
     names = re.findall(r'"([a-z_]+)"', block.group(1))
     assert names == list(_node_functions())
+
+
+def test_final_meta_handles_long_status_text():
+    """历史/最终结果里的长状态（completed_with_action_failure）不能撑破网格。"""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "index.html").read_text(encoding="utf-8")
+    # 状态优先显示中文标签，原始英文值放 title
+    assert "STATUS_TEXT[final.status] || final.status" in html
+    assert 'title="' in html and "escapeHtml(raw)" in html
+    # 网格项必须允许收缩，长串必须能换行
+    assert "min-width: 0" in html
+    assert "overflow-wrap: anywhere" in html

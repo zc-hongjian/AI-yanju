@@ -138,9 +138,9 @@
   .state.skipped { color: var(--gray); background: #f2f4f7; border-color: #e3e8ef; }
   .state.approved { color: var(--accent); background: var(--accent-soft); border-color: #cfe0fd; }
   .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 0 0 6px; }
-  .meta div { background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .meta div { background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
   .meta dt { color: var(--muted); font-size: 12px; }
-  .meta dd { margin: 3px 0 0; font-weight: 600; font-size: 14px; }
+  .meta dd { margin: 3px 0 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; word-break: break-word; }
   .err-list { margin: 8px 0 0; padding-left: 20px; color: #a61b12; font-size: 13px; }
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 0 0 30px; }
   @media (max-width: 720px) {
@@ -1350,7 +1350,8 @@
     currentFinal = final;
     $("final-status").textContent = STATUS_TEXT[final.status] || final.status || "完成";
     const meta = [
-      ["状态", final.status || "-"],
+      // 状态给中文标签，原始英文值放 title，避免 completed_with_action_failure 这类长串撑破网格
+      ["状态", STATUS_TEXT[final.status] || final.status || "-", final.status || ""],
       ["来源数", String((final.sources || []).length)],
       ["证据数", String(final.evidence_count || 0)],
       ["子问题", String((final.sub_questions || []).length)],
@@ -1369,8 +1370,9 @@
       ["trace_id", final.trace_id || "-"],
       ["日志条数", String((final.log_summary || {}).total || latestLogs.length)],
     ];
-    $("final-meta").innerHTML = meta.map(([k, v]) =>
-      "<div><dt>" + escapeHtml(k) + "</dt><dd class='mono'>" + escapeHtml(v) + "</dd></div>").join("");
+    $("final-meta").innerHTML = meta.map(([k, v, raw]) =>
+      "<div><dt>" + escapeHtml(k) + "</dt><dd class='mono'" +
+      (raw ? ' title="' + escapeHtml(raw) + '"' : "") + ">" + escapeHtml(v) + "</dd></div>").join("");
 
     const actions = final.actions || [];
     if (!actions.length) {
