@@ -25,6 +25,8 @@ def _isolate(tmp_path, monkeypatch, *, fake_web) -> TestClient:
     monkeypatch.setenv("AGENT_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("AGENT_OUTBOX_DIR", str(tmp_path / "outbox"))
     monkeypatch.setenv("DEFAULT_EMAIL_TO", "web@example.com")
+    # 删除接口会按 env 路径清理 checkpoint，必须指到本用例的库
+    monkeypatch.setenv("AGENT_CHECKPOINT_DB", str(tmp_path / "checkpoints.sqlite"))
     store = SessionStore(tmp_path / "sessions.sqlite")
     graph = build_graph(build_checkpointer(tmp_path / "checkpoints.sqlite"))
     monkeypatch.setattr(web, "GRAPH", graph)
@@ -129,3 +131,68 @@ def test_get_unknown_session_returns_404(tmp_path, monkeypatch, fake_web):
     client = _isolate(tmp_path, monkeypatch, fake_web=fake_web)
     resp = client.get("/api/sessions/not-exist")
     assert resp.status_code == 404
+
+
+def test_delete_session_removes_index_and_checkpoints(tmp_path, monkeypatch, fake_web):
+    """删除历史会话 = 索引表行 + 该 thread 的 checkpoint/writes 一起清掉。"""
+    import sqlite3
+
+    client = _isolate(tmp_path, monkeypatch, fake_web=fake_web)
+    created = client.post("/api/research", json={"question": "LangGraph 如何实现人工中断？"}).json()
+    thread_id = created["thread_id"]
+    db = tmp_path / "checkpoints.sqlite"
+
+    with sqlite3.connect(str(db)) as conn:
+        before = conn.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+    assert before > 0, "研究跑过就应该有 checkpoint"
+
+    resp = client.delete(f"/api/sessions/{thread_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["removed"]["sessions"] == 1
+    assert body["removed"]["checkpoints"] >= 1
+    assert body["removed"]["writes"] >= 0
+
+    listing = client.get("/api/sessions").json()["sessions"]
+    assert all(row["thread_id"] != thread_id for row in listing)
+    assert client.get(f"/api/sessions/{thread_id}").status_code == 404
+    with sqlite3.connect(str(db)) as conn:
+        after = conn.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+    assert after == 0, "checkpoint 行必须被清理"
+
+
+def test_delete_unknown_session_returns_404(tmp_path, monkeypatch, fake_web):
+    client = _isolate(tmp_path, monkeypatch, fake_web=fake_web)
+    resp = client.delete("/api/sessions/not-exist")
+    assert resp.status_code == 404
+
+
+def test_interrupt_endpoint_marks_running_as_interrupted(tmp_path, monkeypatch, fake_web):
+    client = _isolate(tmp_path, monkeypatch, fake_web=fake_web)
+    web._STORE.upsert("manual-running", trace_id="t1", question="跑一半的会话", status="running")
+
+    resp = client.post("/api/sessions/manual-running/interrupt")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "interrupted"
+    row = next(item for item in client.get("/api/sessions").json()["sessions"]
+               if item["thread_id"] == "manual-running")
+    assert row["status"] == "interrupted"
+
+
+def test_startup_marks_stale_running_sessions(tmp_path, monkeypatch, fake_web):
+    """新进程启动时，遗留的 running 会话必须改成 interrupted，否则历史列表会骗人。"""
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    store.upsert("stale-1", trace_id="t1", question="上次被杀掉的会话", status="running")
+    store.upsert("done-1", trace_id="t2", question="正常完成", status="completed")
+    store.upsert("review-1", trace_id="t3", question="等审批", status="interrupt")
+
+    changed = store.mark_running_as_interrupted()
+    assert changed == 1
+    assert store.get("stale-1")["status"] == "interrupted"
+    assert store.get("done-1")["status"] == "completed"
+    assert store.get("review-1")["status"] == "interrupt", "待审批不能被误标"

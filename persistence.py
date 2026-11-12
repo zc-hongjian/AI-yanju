@@ -126,6 +126,27 @@ class SessionStore:
             )
             self._conn.commit()
 
+    def delete(self, thread_id: str) -> bool:
+        """删除一条会话索引；返回是否真的删到了行。"""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM sessions WHERE thread_id = ?", (thread_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def mark_running_as_interrupted(self) -> int:
+        """服务启动时调用：上一个进程退出后遗留的 running 一定是被中断的。
+
+        只有“进程活着”才可能有 running 会话；新进程启动时还看到 running，
+        说明上次执行时后端被杀/崩溃了，直接标成 interrupted，历史列表才不会骗人。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE sessions SET status = 'interrupted', updated_at = ? WHERE status = 'running'",
+                (_now(),),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
     # ------------------------------------------------------------ 读
     def get(self, thread_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -171,6 +192,32 @@ def get_session_store() -> SessionStore:
     if _STORE is None:
         _STORE = SessionStore()
     return _STORE
+
+
+def delete_thread_data(
+    thread_id: str,
+    db_path: str | os.PathLike[str] | None = None,
+) -> dict[str, int]:
+    """删除某个 thread 在 checkpointer 里的 checkpoint / writes 行。
+
+    - 只删这条 thread 的流程状态，不动 logs/ 与 trace 文件（保留审计线索）；
+    - 和历史列表删除配合使用，避免“列表删了、100MB 的 checkpoint 还在”。
+    """
+    thread_id = str(thread_id or "").strip()
+    path = Path(db_path) if db_path else checkpoint_db_path()
+    if not thread_id or not path.exists():
+        return {"checkpoints": 0, "writes": 0}
+    conn = _connect(path)
+    try:
+        writes = conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,)).rowcount
+        checkpoints = conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,)).rowcount
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"checkpoints": checkpoints, "writes": writes}
 
 
 _STORE: SessionStore | None = None

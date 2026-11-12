@@ -15,11 +15,14 @@ API：
     POST /api/resume/stream     同上
     GET  /api/sessions          历史会话列表（默认 20 条）
     GET  /api/sessions/{id}     加载单个会话（含中断载荷，可用于“继续审批”）
+    DELETE /api/sessions/{id}   删除单个会话（索引 + 该 thread 的 checkpoint/writes）
+    POST /api/sessions/{id}/interrupt  前端发现流中断时把 running 会话标成 interrupted
     GET  /api/health
 
 会话状态存放在 SQLite checkpointer（``data/checkpoints.sqlite``）里，按 thread_id 隔离；
 进程重启后从同一 thread_id 继续 ``Command(resume=...)`` 即可恢复人工审批中断。
 会话索引（问题、状态、更新时间）单独存 ``data/sessions.sqlite``，供历史列表查询。
+服务启动时会把上一个进程遗留的 running 会话标记为 interrupted（进程都换了，不可能还在跑）。
 """
 
 from __future__ import annotations
@@ -74,7 +77,12 @@ try:
     from llm_client import LLMClient, get_llm
     import llm_client
     from logging_utils import register_log_sink, unregister_log_sink
-    from persistence import SessionStore, build_checkpointer, checkpoint_db_path
+    from persistence import (
+        SessionStore,
+        build_checkpointer,
+        checkpoint_db_path,
+        delete_thread_data,
+    )
     from state import new_state
     import tracing
 except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟环境）
@@ -99,6 +107,15 @@ try:
 except Exception as exc:  # noqa: BLE001 - 索引库失败不应拖垮研究主流程
     _STORE = None
     print(f"[研究助手] 会话索引不可用（单次研究不受影响）：{exc}", flush=True)
+if _STORE is not None:
+    # 上个进程被杀/崩溃时，未完成的会话会一直停留在 running；启动时统一标成 interrupted，
+    # 历史列表才不会把“已经没人在跑的会话”显示成“进行中”。
+    try:
+        _stale = _STORE.mark_running_as_interrupted()
+        if _stale:
+            print(f"[研究助手] 启动清理：{_stale} 个遗留 running 会话已标记为 interrupted", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[研究助手] 遗留会话状态清理失败：{exc}", flush=True)
 try:
     _startup_llm = get_llm()
     print(
@@ -380,12 +397,19 @@ def _stream_events(
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    completed = False
+    # 先把 thread_id 告诉前端：中途断开时前端才知道该给哪个会话标“已中断”
+    yield json.dumps(
+        {"type": "start", "thread_id": thread_id, "trace_id": trace_id},
+        ensure_ascii=False,
+    ) + "\n"
     try:
         while True:
             event = events.get()
             if event.get("type") == "__done__":
                 break
             yield json.dumps(event, ensure_ascii=False) + "\n"
+        completed = True
         if "error" in outcome:
             yield json.dumps({"type": "error", "message": outcome["error"]}, ensure_ascii=False) + "\n"
         else:
@@ -393,6 +417,9 @@ def _stream_events(
             yield json.dumps({"type": "result", "data": payload}, ensure_ascii=False) + "\n"
     finally:
         unregister_log_sink(trace_id, sink)
+        if not completed:
+            # 浏览器断开 / 进程被中断：会话不能一直显示“进行中”
+            _session_set_status(thread_id, "interrupted")
 
 
 def _file_response(path: Path, missing: str) -> FileResponse:
@@ -491,6 +518,47 @@ def get_session(thread_id: str) -> dict[str, Any]:
         "updated_at": str((row or {}).get("updated_at") or ""),
         "recoverable": interrupt_payload is not None,
     }
+
+
+@app.post("/api/sessions/{thread_id}/interrupt")
+def mark_session_interrupted(thread_id: str) -> dict[str, Any]:
+    """前端发现流中断（后端退出/断网）时调用：把还在 running 的会话标成 interrupted。"""
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    row = _session_get(tid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if str(row.get("status") or "") == "running":
+        _session_set_status(tid, "interrupted")
+    updated = _session_get(tid) or row
+    return {"ok": True, "thread_id": tid, "status": str(updated.get("status") or "")}
+
+
+@app.delete("/api/sessions/{thread_id}")
+def delete_session(thread_id: str) -> dict[str, Any]:
+    """删除单条历史会话：会话索引 + 该 thread 的 checkpoint/writes。
+
+    logs/ 与 trace 文件不删（保留审计线索）；删除后无法再从历史列表恢复。
+    """
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    row = _session_get(tid)
+    removed: dict[str, int] = {"sessions": 0, "checkpoints": 0, "writes": 0}
+    if _STORE is not None:
+        try:
+            removed["sessions"] = 1 if _STORE.delete(tid) else 0
+        except Exception as exc:  # noqa: BLE001 - 删索引失败要汇报，不能假装成功
+            raise HTTPException(status_code=500, detail=f"删除会话索引失败：{exc}") from exc
+    try:
+        removed.update(delete_thread_data(tid))
+    except Exception as exc:  # noqa: BLE001 - checkpoint 清理失败不影响索引已删
+        print(f"[研究助手] 清理 checkpoint 失败（{tid}）：{exc}", flush=True)
+    _SESSIONS.pop(tid, None)
+    if row is None and removed["sessions"] == 0:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True, "thread_id": tid, "removed": removed}
 
 
 @app.get("/api/trace/{trace_id}")

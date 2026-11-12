@@ -357,6 +357,8 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 | `POST /api/research/stream` / `POST /api/resume/stream` | 同上，但用 NDJSON **实时推送日志**，最后一行是 `result` 或 `error` |
 | `GET /api/sessions?limit=20` | 历史会话列表（问题、状态、更新时间、父会话） |
 | `GET /api/sessions/{thread_id}` | 加载单个会话，返回与 `/api/research` 同构的结构；中断态可直接继续审批 |
+| `DELETE /api/sessions/{thread_id}` | 删除单条历史会话：会话索引 + 该 thread 的 checkpoint/writes（logs/trace 保留） |
+| `POST /api/sessions/{thread_id}/interrupt` | 前端发现流中断时把 `running` 会话标成 `interrupted` |
 | `GET /api/health` | 健康检查、当前 LLM 模式/模型、持久化方式 |
 | `GET /api/trace/{trace_id}` | 节点级调用链：耗时 / token / 成本 / 错误，按开始时间排序 |
 | `GET /api/cost/summary?days=7` | 按天 / 按模型聚合调用次数、token 与成本 |
@@ -393,7 +395,20 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 - 到「草稿 / 邮件 / Notion」任一个人工暂停点时，状态已经写盘；
 - 关掉 `web.py` 再启动，用同一个 `thread_id` 调 `POST /api/resume`（或页面里点“继续审批”）即可从暂停点继续；
 - `GET /api/sessions` 列出历史会话（问题、状态、更新时间），`GET /api/sessions/{thread_id}` 加载详情；
+- **历史会话可删除**：列表每行右侧「删除」→ 页面内二次确认 → `DELETE /api/sessions/{id}`，
+  同时清掉该 thread 的 checkpoint/writes（`logs/` 与 trace 保留用于审计），删除后不可恢复；
 - 会话索引单独存 `data/sessions.sqlite`，索引写失败只影响历史列表，不影响研究主流程。
+
+**执行中后端退出 / 断网**：流式接口第一行会先推 `start` 事件（含 `thread_id`），前端中途断流时能定位会话：
+
+- 进度条**冻结在当前节点**并标红（`已中断 · 第 3/14 步`），已产生的日志保留；
+- 不再渲染一张空白的「最终结果（完成）」卡片，改为「会话未完成」卡片，提供「重新开始 / 删除该会话」；
+- 前端尽力调 `POST /api/sessions/{id}/interrupt` 落库；后端重启时还会把遗留的 `running`
+  会话统一标成 `interrupted`（进程都换了，不可能还在跑），历史列表不会一直显示「进行中」。
+
+![历史会话：已中断状态与删除按钮](docs/web-ui-history-delete.png)
+
+![后端被杀后的中断态：进度冻结 + 未完成卡片](docs/web-ui-interrupted.png)
 
 多轮追问：`POST /api/research` 带 `parent_thread_id` 时，会读取父会话的结论摘要（问题 + 子问题 + 报告正文，
 截断到 1200 字符）注入本轮 `history_context`，规划阶段据此避免重复检索；响应里的会话行会记录 `parent_thread_id`。

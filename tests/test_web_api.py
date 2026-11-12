@@ -86,6 +86,8 @@ def test_web_stream_pushes_logs_before_result(tmp_path, monkeypatch, fake_web):
     events = [json.loads(line) for line in lines]
     types = [event["type"] for event in events]
     assert "log" in types, "流式接口必须先把日志推给前端"
+    assert types[0] == "start", "流一开始要先把 thread_id 推给前端（中断时才知道标哪个会话）"
+    assert events[0]["thread_id"]
     assert types[-1] == "result"
     logs = [event["entry"] for event in events if event["type"] == "log"]
     assert any(entry["node_name"] == "search_web" for entry in logs)

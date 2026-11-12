@@ -163,3 +163,18 @@ def test_final_meta_handles_long_status_text():
     # 网格项必须允许收缩，长串必须能换行
     assert "min-width: 0" in html
     assert "overflow-wrap: anywhere" in html
+
+
+def test_index_supports_history_delete_and_interrupted_state():
+    """历史会话可删除 + 中断态（后端退出/断网）要有对应 UI 与状态处理。"""
+    html = (Path(__file__).resolve().parents[1] / "index.html").read_text(encoding="utf-8")
+    # 删除：行内按钮 + 页面内确认弹层 + DELETE 请求
+    assert 'data-delete-session' in html
+    assert 'id="confirm-modal"' in html and 'id="confirm-ok"' in html
+    assert 'method: "DELETE"' in html
+    # 中断：冻结进度 + 红色中断标 + 专用未完成卡片 + 状态落库调用
+    assert "markProgressInterrupted" in html
+    assert "seg-cell interrupted" in html
+    assert 'id="unfinished-card"' in html
+    assert "/interrupt" in html
+    assert 'interrupted: "已中断"' in html

@@ -2,7 +2,7 @@
 
 > 快照时间：2026-11-09
 > 代码位置：`D:\Build\AI-hy`
-> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」、**报告质量闭环（证据卡片化 → 大纲 → 分节写作 → 引用硬校验）**均已落地，并通过 **152 个测试**、9 项功能验收、6/6 知识库验收；本批报告质量改动尚未提交 Git（上次提交为 `298fc3f`）。
+> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」、**报告质量闭环（证据卡片化 → 大纲 → 分节写作 → 引用硬校验）**均已落地，并通过 **166 个测试**、9 项功能验收、6/6 知识库验收；工作区与远端一致（最新提交见 `git log -1`）。
 
 ---
 
@@ -184,7 +184,8 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 | --- | --- | --- |
 | 断点恢复 | `persistence.build_checkpointer()` → `SqliteSaver` | 服务重启后从草稿/邮件/Notion 中断处 `resume` |
 | 会话索引 | `SessionStore`（`data/sessions.sqlite`） | 历史会话列表、状态、父会话、更新时间 |
-| 历史 API | `GET /api/sessions`、`GET /api/sessions/{thread_id}` | 页面「历史会话」抽屉，中断态点击「继续审批」 |
+| 历史 API | `GET /api/sessions`、`GET /api/sessions/{thread_id}`、`DELETE /api/sessions/{thread_id}` | 页面「历史会话」抽屉，中断态点击「继续审批」；单条删除会连 checkpoint 一起清 |
+| 执行中断 | 流首行 `start` 事件带 `thread_id`；断流 → 进度冻结标红 + 「会话未完成」卡片；`POST /api/sessions/{id}/interrupt` 落库；启动时把遗留 `running` 标 `interrupted` | 后端被杀/断网不再伪装成「完成」或一直「进行中」 |
 | 多轮追问 | `POST /api/research {"parent_thread_id": ...}` | 父会话结论摘要注入 `history_context`（≤1200 字符），规划时避免重复检索 |
 | 前端 | 右上角「历史会话」+ `?history=1` / `?session=<id>` 深链 | 演示与排障可直接打开指定会话 |
 
@@ -262,7 +263,7 @@ mock 只验证流水线机制（搜索→抓取→证据→报告→引用→人
 
 - `evaluation/acceptance_check.py`：**9/9 通过**，覆盖问题拆解、联网搜索、抓取清洗、证据表、
   结构化报告、引用校验、三处人工暂停 + 写门禁、重试降级、可观测；
-- `pytest`：**152 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮、P0-2 Trace/成本、P0-3 RAG、报告质量 21 例）。
+- `pytest`：**166 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮/删除、P0-2 Trace/成本、P0-3 RAG、报告质量 21 例、中断与会话删除）。
 
 ## 8. 运行方式
 
@@ -355,7 +356,7 @@ python evaluation/acceptance_check.py
 5. **延迟上升**：补检让平均延迟 15.6s、P95 26.7s，接近 30s 目标线。
 6. **真实 LLM 未全量评测**：40 题仍是离线 LLM（token/成本为 0）；真实模型只做过 1 题 smoke
    （`llm_smoke`），接入后需重跑。
-7. **单机单用户**：无登录、无多用户隔离；历史会话有列表与恢复，但没有独立报告库与检索。
+7. **单机单用户**：无登录、无多用户隔离；历史会话有列表/恢复/删除，但没有独立报告库与检索。
 8. **工程化不足**：依赖未锁定、无 CI、搜索/抓取无缓存、搜索与抓取串行。
 9. **安全**：`.env` 含真实 Key，已在 `.gitignore` 中；网页填写的 Key 只存进程内存、页面只显示掩码，不会写回 `.env`，但不要暴露到公网。
 10. **SQLite 并发**：单写者模型，WAL 下小流量够用；不要用多个 uvicorn worker 同时跑。
@@ -365,6 +366,8 @@ python evaluation/acceptance_check.py
 14. **报告质量仍依赖模型**：分节写作把单次调用拆成 5~6 次，单题耗时从 ~140s 升到 ~190s；
    引用校验只能查“格式与词面相关”，查不出“结论对但因果说错”；重写被丢弃时仍会留下 1~10 个
    已知问题（写入 `draft_review`，不阻塞流程）。
+15. **中断后只能重跑，不能续跑**：checkpoint 只保证“人工审批点可恢复”；如果进程在普通节点执行中
+   被杀（还没到 interrupt），这次运行会被标成 `interrupted`，可以重新开始或删除会话，但不能从第 N 步接着跑。
 
 ## 10. 优化路线（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）
 
