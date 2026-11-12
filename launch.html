@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>研究助手 · 一键启用</title>
+  <style>
+    :root {
+      --bg: #05070d;
+      --card: rgba(15, 23, 42, .74);
+      --ink: #e6edf7;
+      --muted: #8fa3bf;
+      --line: rgba(148, 163, 184, .16);
+      --accent: #22d3ee;
+      --accent-2: #8b5cf6;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #fb7185;
+      --glow: 0 0 0 1px rgba(34, 211, 238, .22), 0 18px 50px rgba(0, 0, 0, .45);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 15px/1.65 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      background:
+        radial-gradient(900px 520px at 12% -10%, rgba(34, 211, 238, .16), transparent 62%),
+        radial-gradient(820px 520px at 92% 4%, rgba(139, 92, 246, .16), transparent 60%),
+        radial-gradient(700px 500px at 50% 110%, rgba(14, 165, 233, .08), transparent 60%),
+        var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px 60px;
+    }
+    .wrap { width: min(760px, 100%); }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 34px; }
+    .logo {
+      width: 46px; height: 46px; border-radius: 14px; flex: none;
+      display: grid; place-items: center;
+      font-weight: 800; font-size: 20px; color: #041019;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 10px 30px rgba(34, 211, 238, .28);
+    }
+    .brand strong { display: block; font-size: 17px; letter-spacing: .2px; }
+    .brand span { color: var(--muted); font-size: 12.5px; }
+
+    .hero {
+      background: linear-gradient(160deg, rgba(15, 23, 42, .82), rgba(10, 17, 32, .9));
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 34px 32px 28px;
+      box-shadow: var(--glow);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute; inset: -40% -10% auto auto;
+      width: 380px; height: 380px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(139, 92, 246, .18), transparent 65%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      margin: 0 0 10px; color: var(--accent);
+      font-size: 11.5px; letter-spacing: .18em; font-weight: 700;
+    }
+    h1 {
+      margin: 0 0 14px; font-size: clamp(26px, 4.2vw, 38px); line-height: 1.22;
+      background: linear-gradient(100deg, #eaf6ff 10%, #67e8f9 45%, #a78bfa 90%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .sub { margin: 0 0 24px; color: var(--muted); max-width: 56ch; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      border-radius: 12px; padding: 12px 18px;
+      font-size: 14.5px; font-weight: 600; text-decoration: none;
+      cursor: pointer; border: 1px solid transparent;
+      transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+    .btn.primary {
+      color: #031018; border: none;
+      background: linear-gradient(100deg, #22d3ee, #8b5cf6);
+      box-shadow: 0 12px 34px rgba(34, 211, 238, .3);
+    }
+    .btn.primary:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(34, 211, 238, .4); }
+    .btn.ghost {
+      color: #c3d2e5; background: rgba(148, 163, 184, .07);
+      border-color: var(--line);
+    }
+    .btn.ghost:hover { color: #ecfeff; border-color: rgba(34, 211, 238, .45); background: rgba(34, 211, 238, .1); }
+    .btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .65); outline-offset: 2px; }
+
+    .status {
+      display: flex; align-items: center; gap: 9px;
+      font-size: 13px; color: var(--muted);
+      border: 1px dashed var(--line); border-radius: 11px;
+      padding: 10px 13px; margin-bottom: 20px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
+    .dot.ok { background: var(--green); box-shadow: 0 0 10px rgba(52, 211, 153, .7); }
+    .dot.bad { background: var(--red); }
+    .status code { color: #c3d2e5; background: rgba(148, 163, 184, .1); padding: 1px 6px; border-radius: 6px; }
+
+    .steps { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 8px; }
+    .steps li { display: flex; gap: 10px; color: #a9bdd6; font-size: 13.5px; }
+    .steps b { color: var(--accent); font-weight: 700; min-width: 18px; }
+
+    details.help { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+    details.help summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    details.help summary:hover { color: var(--accent); }
+    details.help pre {
+      margin: 10px 0 0; padding: 12px 14px; border-radius: 10px;
+      background: rgba(2, 6, 14, .72); border: 1px solid var(--line);
+      color: #c8d5e8; font-size: 12.5px; overflow: auto;
+    }
+    footer { margin-top: 22px; text-align: center; color: var(--muted); font-size: 12px; }
+    @media (max-width: 560px) {
+      .hero { padding: 26px 20px; }
+      .actions { flex-direction: column; }
+      .btn { justify-content: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .dot { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand">
+      <div class="logo">研</div>
+      <div>
+        <strong>LangGraph 研究助手</strong>
+        <span>检索 → 证据 → 报告草稿 → 人工确认 → 邮件 / Notion</span>
+      </div>
+    </div>
+
+    <section class="hero">
+      <p class="eyebrow">RESEARCH AGENT · ONE-CLICK</p>
+      <h1>一键启用<br />从问题到带引用的研究报告</h1>
+      <p class="sub">
+        点「一键启用」进入主界面，先填模型 Key（也可以跳过，直接用离线模式）。
+        页面右上角的「模型设置」随时可以改，Key 只保存在后端进程内存里。
+      </p>
+
+      <div class="actions">
+        <button class="btn primary" id="launch-btn" type="button">🚀 一键启用（先填模型 Key）</button>
+        <a class="btn ghost" id="skip-link" href="./index.html">跳过设置，直接进入</a>
+        <a class="btn ghost" id="demo-link" href="./index.html?autostart=1&q=LangGraph%20%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E4%BA%BA%E5%B7%A5%E4%B8%AD%E6%96%AD%EF%BC%9F">看静态演示</a>
+        <a class="btn ghost" id="history-link" href="./index.html?history=1">历史会话</a>
+      </div>
+
+      <div class="status" id="status">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">正在检查后端…</span>
+      </div>
+
+      <ol class="steps">
+        <li><b>1</b><span>填模型 Key（智谱 / DeepSeek / OpenAI 兼容接口都行）</span></li>
+        <li><b>2</b><span>输入研究问题，14 个节点自动跑：搜索 → 抓取 → 证据 → 大纲 → 报告</span></li>
+        <li><b>3</b><span>草稿、发邮件、存 Notion 三处人工确认，写操作未经同意不会执行</span></li>
+        <li><b>4</b><span>结果页可下载 Markdown、查看调用链 Trace 与成本</span></li>
+      </ol>
+
+      <details class="help">
+        <summary>后端没启动？点这里看怎么启动</summary>
+        <pre>双击根目录的 start.bat（自动开浏览器）
+或命令行：.venv\Scripts\python.exe web.py
+然后访问：http://127.0.0.1:8000/launch
+端口可用环境变量 AGENT_WEB_PORT 修改。</pre>
+      </details>
+    </section>
+
+    <footer>同一张 LangGraph 图 · CLI 与网页共用 · 写操作强制人工确认</footer>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      var isFile = location.protocol === "file:";
+      var launchBtn = document.getElementById("launch-btn");
+      var skipLink = document.getElementById("skip-link");
+      var demoLink = document.getElementById("demo-link");
+      var historyLink = document.getElementById("history-link");
+      var dot = document.getElementById("status-dot");
+      var statusText = document.getElementById("status-text");
+      var DEMO_URL = "./index.html?q=" + encodeURIComponent("LangGraph 如何实现人工中断？") + "&autostart=1";
+
+      function setStatus(kind, text) {
+        dot.className = "dot" + (kind === "ok" ? " ok" : kind === "bad" ? " bad" : "");
+        statusText.innerHTML = text;
+      }
+
+      function setPrimary(label) {
+        launchBtn.textContent = label;
+      }
+
+      function start() {
+        // 连后端时先填模型 Key（?settings=1 打开主界面并自动弹出模型设置）；
+        // 本地文件模式没有后端，改为进入静态演示
+        location.href = isFile ? DEMO_URL : "./index.html?settings=1";
+      }
+
+      launchBtn.addEventListener("click", start);
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") start();
+      });
+
+      if (isFile) {
+        // 直接双击打开的本地文件：没有后端，一键启用改为静态演示
+        setStatus("bad", "本地文件模式（file://）：没有后端，将打开<strong>静态演示</strong>（示例数据）");
+        setPrimary("🚀 一键启用（静态演示）");
+        historyLink.hidden = true;
+        return;
+      }
+
+      fetch("./api/health")
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("health " + resp.status);
+          return resp.json();
+        })
+        .then(function (data) {
+          var mode = data.llm_mode === "openai" ? "真实模型" : "离线启发式";
+          setStatus(
+            "ok",
+            "后端已连接 · 模式：<strong>" + mode + "</strong> · 模型：<code>" +
+            (data.model || "-") + "</code>"
+          );
+        })
+        .catch(function () {
+          setStatus(
+            "bad",
+            "后端未连接：请先运行 <code>python web.py</code>，或双击 <code>start.bat</code>；" +
+            "也可以直接「跳过设置，直接进入」离线模式"
+          );
+        });
+    })();
+  </script>
+</body>
+</html>

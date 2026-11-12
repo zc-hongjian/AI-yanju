@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
+LAUNCH_FILE = BASE_DIR / "launch.html"
 REQUIREMENTS = BASE_DIR / "requirements.txt"
 PROJECT_VENV_PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
 
@@ -399,6 +400,23 @@ def index() -> FileResponse:
     if not INDEX_FILE.exists():
         raise HTTPException(status_code=500, detail="缺少 index.html")
     return FileResponse(INDEX_FILE)
+
+
+@app.get("/index.html", include_in_schema=False)
+def index_alias() -> FileResponse:
+    """给启动页/深链用：./index.html?settings=1 在 http 下也要能访问（file:// 时是同一文件）。"""
+    return index()
+
+
+@app.get("/launch", include_in_schema=False)
+def launch() -> FileResponse:
+    """一键启用启动页：检查后端/模型状态，一键进入主界面（默认先弹模型设置）。
+
+    页面本身是独立的 launch.html，双击用 file:// 打开时自动降级为「一键进入静态演示」。
+    """
+    if not LAUNCH_FILE.exists():
+        raise HTTPException(status_code=500, detail="缺少 launch.html")
+    return FileResponse(LAUNCH_FILE)
 
 
 @app.get("/api/health")

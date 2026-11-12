@@ -78,6 +78,8 @@ flowchart TD
 ├── main.py              # 命令行入口（中断-恢复循环）
 ├── check_llm.py         # 真实大模型接入自检（读 .env + 真实调用一次）
 ├── web.py               # 网页版入口（FastAPI，复用同一张图与同一套门禁）
+├── launch.html          # 一键启用启动页（检查后端/模型状态 → 进主界面并弹模型设置）
+├── start.bat            # Windows 一键启动：起后端 + 4 秒后自动打开 /launch
 ├── index.html           # 单页前端（可直接双击演示；由 web.py 托管时连真实后端）
 ├── evaluation/          # 40 题评测集 + 跑分脚本 + eval_report.md
 │   ├── dataset.jsonl    # 测试集（简单事实 / 对比 / 时效 / 多跳，各 10 题）
@@ -308,6 +310,22 @@ uvicorn web:app --host 127.0.0.1 --port 8000
   用内置示例数据走完「草稿 → 邮件 → Notion」三次确认，不需要后端；页面顶部会明确标注
   「静态演示模式：数据是示例，未连接后端」。也可以带参数直接看演示：
   `index.html?q=你的研究问题&autostart=1`。
+
+#### 一键启用（launch.html + start.bat）
+
+- **双击 `start.bat`**：在项目根目录起 `web.py`，4 秒后自动打开 <http://127.0.0.1:8000/launch>；
+  端口跟随 `AGENT_WEB_PORT`（默认 8000），脚本失败会打印依赖/端口提示并 `pause`。
+- 或者手动 `python web.py` 后访问 **`/launch`**。
+- 启动页会先探测 `/api/health`：显示「后端已连接 · 模式 · 模型」或「后端未连接 + 启动命令」；
+  主按钮「🚀 一键启用」= 打开主界面并**自动弹出模型设置**（`index.html?settings=1`），
+  填完 Key 直接开跑；另有「跳过设置，直接进入」「看静态演示」「历史会话」三个入口。
+- 直接双击 `launch.html`（`file://`）也能用：检测不到后端时自动降级为
+  「一键启用（静态演示）」，`?history=1` 入口会隐藏（静态模式没有后端）。
+- 为支持启动页的相对链接，`web.py` 额外提供了 `/index.html` 别名路由（和 `/` 同一个文件）。
+
+![一键启用启动页](docs/web-ui-launch.png)
+
+![一键启用后自动弹出模型设置](docs/web-ui-launch-settings.png)
 
 ![静态演示模式的草稿确认界面](docs/web-ui-demo.png)
 

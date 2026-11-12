@@ -50,6 +50,8 @@ AI-hy/
 ├── web.py                # Web 入口（FastAPI，复用同一张图与门禁）
 ├── persistence.py        # 持久化：SQLite checkpointer + 会话索引表（历史/多轮）
 ├── index.html            # 单页前端：可直接双击演示，也可由 web.py 托管连真实后端
+├── launch.html           # 一键启用启动页（探活 → 进主界面并弹模型设置；file:// 降级演示）
+├── start.bat             # Windows 一键启动：起 web.py + 自动打开 /launch
 ├── check_llm.py          # 真实 LLM 配置自检（读 .env、真实调用一次、可 --set-key）
 ├── evaluation/           # 40 题评测集、跑分、报告、验收脚本、mock fixture
 ├── data/                 # 运行期 SQLite（checkpoints / sessions，已 gitignore）
@@ -298,7 +300,14 @@ python main.py "LangGraph 如何实现人工中断？" --auto
 python web.py                    # http://127.0.0.1:8000
 # 或
 uvicorn web:app --host 127.0.0.1 --port 8000
+
+# 一键启用（Windows）：起后端 + 自动打开启动页 /launch
+start.bat
 ```
+
+启动页 `launch.html` 探测 `/api/health` 后一键进入主界面并自动弹出模型设置；双击
+`launch.html`（file://）时降级为「一键启用（静态演示）」。`web.py` 另提供 `/index.html`
+别名路由，供启动页的相对深链在 http 下使用。
 
 `index.html` 也可直接双击作为静态演示（不连后端）。
 
@@ -402,6 +411,7 @@ python evaluation/acceptance_check.py
 | [llm_client.py](llm_client.py) | LLM 客户端 + 离线回退 |
 | [prompts.py](prompts.py) | 全部提示词 |
 | [web.py](web.py) / [index.html](index.html) | Web 后端 / 单页前端 |
+| [launch.html](launch.html) / [start.bat](start.bat) | 一键启用启动页 / Windows 启动脚本 |
 | [persistence.py](persistence.py) | SQLite checkpointer + 会话索引（历史/多轮） |
 | [rag.py](rag.py) | 知识库分块 / BM25 / 向量 / RRF / 索引缓存 |
 | [tracing.py](tracing.py) | 节点 Span + 模型价目表成本归因 |
