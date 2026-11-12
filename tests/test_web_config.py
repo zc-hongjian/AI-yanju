@@ -131,8 +131,12 @@ def test_index_progress_ui_has_segments_and_collapse_toggle():
     html = (Path(__file__).resolve().parents[1] / "index.html").read_text(encoding="utf-8")
     assert 'id="seg-bar"' in html, "执行进度需要分段进度条容器"
     assert 'id="progress-body"' in html and 'id="progress-toggle"' in html, "执行进度需要可收纳"
+    assert 'id="progress-log"' in html, "日志表格要单独包一层，收起时只收起日志"
     assert 'id="stage-copy"' in html and 'id="stage-percent"' in html, "需要阶段文案与百分比"
     assert 'aria-valuenow' in html, "进度条要有无障碍语义"
+    # 收起时保留进度条：折叠的必须是 progress-log，不能是 progress-body
+    assert '$("progress-log").hidden = collapsed' in html
+    assert '$("progress-body").hidden = collapsed' not in html
 
 
 def test_progress_node_order_matches_graph_nodes():

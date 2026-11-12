@@ -397,6 +397,10 @@
   .collapse-btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; }
   .collapse-btn .chev { display: inline-block; transition: transform .18s ease; }
   #progress-card.collapsed .collapse-btn .chev { transform: rotate(-90deg); }
+  /* 收起时只收日志，进度条与阶段文案保留，卡片更矮 */
+  #progress-card.collapsed .stage-row { margin-bottom: 6px; }
+  #progress-card.collapsed .seg-bar { margin-bottom: 2px; }
+  #progress-card.collapsed .stage-emoji { font-size: 22px; }
   .stage-row { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
   .stage-emoji {
     font-size: 26px; line-height: 1; flex: none;
@@ -636,7 +640,7 @@
     <div class="card-head progress-head">
       <h2>执行进度</h2>
       <span class="muted" id="progress-text">处理中…</span>
-      <button type="button" class="collapse-btn" id="progress-toggle" aria-expanded="true" aria-controls="progress-body">
+      <button type="button" class="collapse-btn" id="progress-toggle" aria-expanded="true" aria-controls="progress-log">
         <span id="progress-toggle-text">收起</span><span class="chev" aria-hidden="true">▾</span>
       </button>
     </div>
@@ -651,7 +655,7 @@
       </div>
       <div class="seg-bar" id="seg-bar" role="progressbar" aria-valuemin="0" aria-valuemax="14"
         aria-valuenow="0" aria-label="研究流程进度"></div>
-      <div class="log-wrap">
+      <div class="log-wrap" id="progress-log">
         <table class="log-table">
           <thead>
             <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
@@ -959,9 +963,10 @@
 
   function setProgressCollapsed(collapsed) {
     progressCollapsed = collapsed;
-    $("progress-body").hidden = collapsed;
+    // 收起的是日志表格，进度条与阶段文案始终可见
+    $("progress-log").hidden = collapsed;
     $("progress-card").classList.toggle("collapsed", collapsed);
-    $("progress-toggle-text").textContent = collapsed ? "展开" : "收起";
+    $("progress-toggle-text").textContent = collapsed ? "展开日志" : "收起日志";
     $("progress-toggle").setAttribute("aria-expanded", String(!collapsed));
   }
 
