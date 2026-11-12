@@ -11,6 +11,15 @@ import web
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_home_serves_launch_page():
+    """启动 web.py 后打开根路径就应该看到“一键启用”，否则用户以为没生效。"""
+    client = TestClient(web.app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "一键启用" in resp.text
+    assert 'id="launch-btn"' in resp.text
+
+
 def test_launch_route_serves_one_click_page():
     client = TestClient(web.app)
     resp = client.get("/launch")
@@ -33,24 +42,17 @@ def test_launch_page_is_standalone_and_links_to_main_ui():
     assert "DEMO_URL" in html
 
 
-def test_index_route_still_serves_main_page():
+def test_main_ui_at_index_html_and_app():
     client = TestClient(web.app)
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert 'id="progress-card"' in resp.text
-
-
-def test_index_html_alias_works_for_launcher_links():
-    """启动页用 ./index.html?settings=1 这种相对路径，http 下也要能打开主界面。"""
-    client = TestClient(web.app)
-    resp = client.get("/index.html")
-    assert resp.status_code == 200
-    assert 'id="progress-card"' in resp.text
+    for path in ("/index.html", "/app"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert 'id="progress-card"' in resp.text, path
 
 
 def test_start_script_launches_web_and_opens_launch_page():
     bat = (ROOT / "start.bat").read_text(encoding="utf-8", errors="ignore")
     assert "web.py" in bat
-    assert "/launch" in bat
-    assert "%AGENT_WEB_PORT%" in bat
+    assert "AGENT_WEB_PORT" in bat
+    assert "/index.html" in bat, "脚本要告诉用户主界面在哪"
     assert ".venv" in bat, "优先用项目虚拟环境里的 Python"

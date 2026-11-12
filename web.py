@@ -395,17 +395,20 @@ def _stream_events(
         unregister_log_sink(trace_id, sink)
 
 
+def _file_response(path: Path, missing: str) -> FileResponse:
+    if not path.exists():
+        raise HTTPException(status_code=500, detail=missing)
+    return FileResponse(path)
+
+
 @app.get("/", include_in_schema=False)
-def index() -> FileResponse:
-    if not INDEX_FILE.exists():
-        raise HTTPException(status_code=500, detail="缺少 index.html")
-    return FileResponse(INDEX_FILE)
+def home() -> FileResponse:
+    """启动后首页 = 一键启用页；主界面在 /index.html（或 /app）。
 
-
-@app.get("/index.html", include_in_schema=False)
-def index_alias() -> FileResponse:
-    """给启动页/深链用：./index.html?settings=1 在 http 下也要能访问（file:// 时是同一文件）。"""
-    return index()
+    之前 / 直接返回 index.html，启动 web.py 后看不到任何变化，
+    用户也无从知道「一键启用」页的存在——所以把启动页放到根路径。
+    """
+    return _file_response(LAUNCH_FILE, "缺少 launch.html")
 
 
 @app.get("/launch", include_in_schema=False)
@@ -414,9 +417,19 @@ def launch() -> FileResponse:
 
     页面本身是独立的 launch.html，双击用 file:// 打开时自动降级为「一键进入静态演示」。
     """
-    if not LAUNCH_FILE.exists():
-        raise HTTPException(status_code=500, detail="缺少 launch.html")
-    return FileResponse(LAUNCH_FILE)
+    return _file_response(LAUNCH_FILE, "缺少 launch.html")
+
+
+@app.get("/index.html", include_in_schema=False)
+def index() -> FileResponse:
+    """主界面（单页前端）。启动页与深链都用这个路径，file:// 下是同一个文件。"""
+    return _file_response(INDEX_FILE, "缺少 index.html")
+
+
+@app.get("/app", include_in_schema=False)
+def app_home() -> FileResponse:
+    """主界面短链接：/app?settings=1 等价于 /index.html?settings=1。"""
+    return index()
 
 
 @app.get("/api/health")

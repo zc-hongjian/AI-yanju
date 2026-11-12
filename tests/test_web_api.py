@@ -10,10 +10,12 @@ import web
 
 
 def test_web_index_served():
+    """主界面在 /index.html（根路径 / 是一键启用页，见 test_launch_page.py）。"""
     client = TestClient(web.app)
-    resp = client.get("/")
+    resp = client.get("/index.html")
     assert resp.status_code == 200
     assert "LangGraph 研究助手" in resp.text
+    assert 'id="progress-card"' in resp.text
 
 
 def test_web_api_rejects_empty_question():

@@ -4,15 +4,15 @@ setlocal
 cd /d "%~dp0"
 
 if not defined AGENT_WEB_PORT set "AGENT_WEB_PORT=8000"
-set "LAUNCH_URL=http://127.0.0.1:%AGENT_WEB_PORT%/launch"
-set "APP_URL=http://127.0.0.1:%AGENT_WEB_PORT%/"
+set "LAUNCH_URL=http://127.0.0.1:%AGENT_WEB_PORT%/"
+set "APP_URL=http://127.0.0.1:%AGENT_WEB_PORT%/index.html"
 
 set "PY=%CD%\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
 echo ============================================================
 echo   LangGraph 研究助手 . 一键启动
-echo   启动页：%LAUNCH_URL%
+echo   启动页：%LAUNCH_URL%  （一键启用 + 模型设置）
 echo   主界面：%APP_URL%
 echo   关闭本窗口即停止服务（Ctrl+C 也可以停止）
 echo ============================================================

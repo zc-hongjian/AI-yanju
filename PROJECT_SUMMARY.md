@@ -297,17 +297,18 @@ python main.py "LangGraph 如何实现人工中断？"
 python main.py "LangGraph 如何实现人工中断？" --auto
 
 # 网页版
-python web.py                    # http://127.0.0.1:8000
+python web.py                    # 启动页 http://127.0.0.1:8000/
+                                 # 主界面 http://127.0.0.1:8000/index.html（/app 同）
 # 或
 uvicorn web:app --host 127.0.0.1 --port 8000
 
-# 一键启用（Windows）：起后端 + 自动打开启动页 /launch
+# 一键启用（Windows）：起后端 + 自动打开启动页
 start.bat
 ```
 
 启动页 `launch.html` 探测 `/api/health` 后一键进入主界面并自动弹出模型设置；双击
-`launch.html`（file://）时降级为「一键启用（静态演示）」。`web.py` 另提供 `/index.html`
-别名路由，供启动页的相对深链在 http 下使用。
+`launch.html`（file://）时降级为「一键启用（静态演示）」。**根路径 `/` 就是启动页**，
+主界面在 `/index.html`（`/app` 等价，供启动页相对深链与旧书签使用）。
 
 `index.html` 也可直接双击作为静态演示（不连后端）。
 

@@ -218,6 +218,9 @@
         return;
       }
 
+      // 连后端时这个入口是「自动跑一题示例」，不是静态演示
+      demoLink.textContent = "跑一题示例（自动开始）";
+
       fetch("./api/health")
         .then(function (resp) {
           if (!resp.ok) throw new Error("health " + resp.status);
