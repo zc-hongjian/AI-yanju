@@ -1,6 +1,6 @@
 # 研究助手优化路线图（OPTIMIZATION.md）
 
-> 基于当前仓库代码与最近一次评测（`evaluation/eval_report.md`、`evaluation/results/`）的差距分析。
+> 基于当前仓库代码与最近一次评测（`eval_report.md`、`evaluation/results/`）的差距分析。
 > 目标不是“再加功能”，而是把「有来源」升级为「答得对、答得全、可复核」。
 
 ## 0. 一句话结论
@@ -240,7 +240,7 @@
 3. `GET /api/sessions` 列出该会话、`GET /api/sessions/{id}` 能还原 15 条日志与草稿；
 4. `POST /api/resume` 直接返回 `email_confirmation` —— **证明重启后可继续审批**。
 
-截图：`docs/web-ui-history.png`（历史抽屉）、`docs/web-ui-recover.png`（恢复后的草稿审核页）。
+截图：`../原型图/web-ui-history.png`（历史抽屉）、`../原型图/web-ui-recover.png`（恢复后的草稿审核页）。
 
 ### 10.2 设计取舍
 
@@ -269,7 +269,7 @@
 | 测试 | 新增 `tests/test_tracing.py`（6 例）；全量 **124 passed** | ✅ |
 
 验收：用真实 LLM 跑一次完整流程（glm-4-flash）→ 12 个 span、token 6041、`retrieve_knowledge` 节点
-单独 1442 token；`token_usage_by_node` 之和等于运行总量。截图 `docs/web-ui-trace.png`。
+单独 1442 token；`token_usage_by_node` 之和等于运行总量。截图 `../原型图/web-ui-trace.png`。
 
 设计取舍：
 
@@ -295,7 +295,7 @@
 
 验收数据：`knowledge/` 3 篇文档 / 14 个 chunk；Zhipu `embedding-3` 真实向量（2048 维）索引成功，
 无 embedding 时自动降级 BM25。真实 LLM + 真实联网一次运行：来源 8（网页 2 + 知识库 6）、
-证据 10、token 6041。截图 `docs/web-ui-rag.png`。
+证据 10、token 6041。截图 `../原型图/web-ui-rag.png`。
 
 设计取舍：
 

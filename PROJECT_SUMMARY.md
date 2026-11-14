@@ -34,39 +34,45 @@
 
 ```text
 AI-hy/
+├── 原型图/               # 页面原型/界面截图（15 张，原 docs/）
+├── 开发文档/             # 接口文档、数据库设计、OPTIMIZATION、验收/评测报告
+├── frontend/             # 前端代码索引（代码仍在根目录）
+├── backend/              # 后端代码索引（代码仍在根目录）
+├── docs/                 # 已迁移，仅保留指向 原型图/ 的索引
+│
 ├── graph.py              # LangGraph 图：14 个节点 + 条件边 + 3 处 interrupt + checkpointer
 ├── state.py              # ResearchState TypedDict、初始状态、质量闭环字段
-├── quality.py            # P0：子问题覆盖度 + claim→quote 支持性校验
-├── reporting.py          # 报告质量：证据卡片化 + 大纲 + 引用硬校验/程序修复
-├── rag.py                # P0-3：知识库分块 + BM25 + 可选向量 + RRF + 索引缓存
-├── tracing.py            # P0-2：节点 Span + 模型价目表成本归因
+├── quality.py            # 子问题覆盖度 + claim→quote 支持性校验
+├── reporting.py          # 证据卡片化 + 大纲 + 引用硬校验/程序修复
+├── rag.py                # 知识库分块 + BM25 + 可选向量 + RRF + 索引缓存
+├── tracing.py            # 节点 Span + 模型价目表成本归因
 ├── tools.py              # 5 个工具、JSON Schema、重试/退避/熔断、SSRF、写操作门禁
 ├── llm_client.py         # OpenAI Function Calling 客户端 + 离线启发式回退
 ├── prompts.py            # 规划 / 证据 / 报告提示词
-├── text_clean.py         # 网页编码探测（BOM/header/meta/charset-normalizer）+ 乱码清洗
+├── text_clean.py         # 网页编码探测 + 乱码清洗
 ├── logging_utils.py      # 结构化日志（state + JSONL）与实时日志订阅
 ├── human_review.py       # 命令行人工确认（草稿 / 写操作参数）
 ├── main.py               # CLI 入口（interrupt → resume 循环）
 ├── web.py                # Web 入口（FastAPI，复用同一张图与门禁）
-├── persistence.py        # 持久化：SQLite checkpointer + 会话索引表（历史/多轮）
-├── index.html            # 单页前端：可直接双击演示，也可由 web.py 托管连真实后端
-├── launch.html           # 一键启用启动页（探活 → 进主界面并弹模型设置；file:// 降级演示）
-├── start.bat             # Windows 一键启动：起 web.py + 自动打开 /launch
-├── check_llm.py          # 真实 LLM 配置自检（读 .env、真实调用一次、可 --set-key）
-├── evaluation/           # 40 题评测集、跑分、报告、验收脚本、mock fixture
-├── data/                 # 运行期 SQLite（checkpoints / sessions，已 gitignore）
-├── tests/                # 152 个单元/集成/端到端测试
+├── persistence.py        # SQLite checkpointer + 会话索引表（历史/多轮/删除）
+├── index.html            # 单页前端：双击演示，或由 web.py 托管连真实后端
+├── launch.html           # 一键启用启动页（探活 → 进主界面并弹模型设置）
+├── start.bat             # Windows 一键启动：起 web.py + 自动打开启动页
+├── check_llm.py          # 真实 LLM 配置自检
+├── evaluation/           # 40 题评测集、跑分、验收脚本、mock fixture
+├── knowledge/            # 本地知识库（3 篇 md）
+├── config/pricing.json   # 模型价目表
+├── data/ logs/ outbox/   # 运行期产物（gitignore）
+├── tests/                # 23 个测试文件 / 166 个用例
 ├── README.md             # 使用与验收文档
-├── OPTIMIZATION.md       # 优化路线图 + P0 实施记录
 ├── PROJECT_SUMMARY.md    # 本文
-├── FUNCTIONAL_ACCEPTANCE.md # 9 项功能验收报告（自动生成）
-├── VERIFICATION_REPORT.md   # 早期独立验收报告（历史记录）
+├── RESUME_ROADMAP.md     # 简历/面试材料
 ├── requirements.txt
 ├── pytest.ini
 └── .env.example          # 环境变量模板（真实 Key 只在被忽略的 .env）
 ```
 
-## 4. 工作流：14 个节点 + 3 次人工暂停
+：14 个节点 + 3 次人工暂停
 
 ```mermaid
 flowchart TD
@@ -244,7 +250,7 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 | 平均检索轮次 | 1.0 | **1.68** |
 | 平均 / P95 延迟 | 9.8s / 19.8s | 15.6s / 26.7s |
 
-来源：[evaluation/eval_report.md](evaluation/eval_report.md)；原始数据在 `evaluation/results/real_p0.*`。
+来源：[开发文档/eval_report.md](开发文档/eval_report.md)；原始数据在 `evaluation/results/real_p0.*`。
 
 ### 7.2 mock 流水线评测（确定性 fixture）
 
@@ -369,7 +375,7 @@ python evaluation/acceptance_check.py
 15. **中断后只能重跑，不能续跑**：checkpoint 只保证“人工审批点可恢复”；如果进程在普通节点执行中
    被杀（还没到 interrupt），这次运行会被标成 `interrupted`，可以重新开始或删除会话，但不能从第 N 步接着跑。
 
-## 10. 优化路线（详见 [OPTIMIZATION.md](OPTIMIZATION.md)）
+## 10. 优化路线（详见 [开发文档/OPTIMIZATION.md](开发文档/OPTIMIZATION.md)）
 
 ### 下一批 P0（收益最高）
 
@@ -405,9 +411,9 @@ python evaluation/acceptance_check.py
 | 文件 | 说明 |
 | --- | --- |
 | [README.md](README.md) | 安装、运行、验收、已知限制 |
-| [OPTIMIZATION.md](OPTIMIZATION.md) | 优化路线图 + P0 实施记录/前后对比 |
-| [evaluation/eval_report.md](evaluation/eval_report.md) | 40 题评测报告（指标、失败案例、消融、P0 对比） |
-| [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) | 9 项功能闭环验收报告 |
+| [开发文档/OPTIMIZATION.md](开发文档/OPTIMIZATION.md) | 优化路线图 + P0 实施记录/前后对比 |
+| [开发文档/eval_report.md](开发文档/eval_report.md) | 40 题评测报告（指标、失败案例、消融、P0 对比） |
+| [开发文档/FUNCTIONAL_ACCEPTANCE.md](开发文档/FUNCTIONAL_ACCEPTANCE.md) | 9 项功能闭环验收报告 |
 | [graph.py](graph.py) | 12 节点图、interrupt、条件边、finalize |
 | [quality.py](quality.py) | 子问题覆盖度 + claim 支持校验 |
 | [reporting.py](reporting.py) | 证据卡片化 / 大纲 / 引用硬校验 / 程序修复 |
@@ -450,4 +456,4 @@ python evaluation/make_report.py
 ---
 
 **说明**：本文是当前工作区快照，不替代 `README.md` 的详细说明；数字类结论以
-`evaluation/results/real_p0.summary.json`、`mock_p0.summary.json` 与 `FUNCTIONAL_ACCEPTANCE.md` 为准。
+`evaluation/results/real_p0.summary.json`、`mock_p0.summary.json` 与 `开发文档/FUNCTIONAL_ACCEPTANCE.md` 为准。

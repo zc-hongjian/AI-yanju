@@ -62,12 +62,18 @@ flowchart TD
 
 ```
 .
+├── 原型图/               # 页面原型/界面截图（15 张，原 docs/）
+├── 开发文档/             # 接口文档、数据库设计文档、优化记录、验收/评测报告
+├── frontend/             # 前端代码索引（代码仍在根目录：index.html / launch.html）
+├── backend/              # 后端代码索引（代码仍在根目录：*.py）
+├── docs/                 # 已迁移，仅保留指向 原型图/ 的索引
+│
 ├── graph.py             # LangGraph 图：14 个节点 + 条件边 + interrupt + checkpointer
 ├── state.py             # ResearchState TypedDict + 初始状态
-├── quality.py           # P0 质量闭环：子问题覆盖度 + claim→quote 支持性校验
+├── quality.py           # 研究质量闭环：子问题覆盖度 + claim→quote 支持性校验
 ├── reporting.py         # 报告质量：证据卡片化 + 大纲 + 引用硬校验/程序修复
-├── rag.py               # P0-3 RAG：分块 + BM25 + 可选向量 + RRF 融合 + 索引缓存
-├── tracing.py           # P0-2 可观测性：节点 Span + 模型价目表成本归因
+├── rag.py               # 知识库：分块 + BM25 + 可选向量 + RRF 融合 + 索引缓存
+├── tracing.py           # 可观测性：节点 Span + 模型价目表成本归因
 ├── tools.py             # 5 个工具、JSON Schema、重试装饰逻辑、写操作门禁
 ├── text_clean.py        # 网页编码探测（charset_normalizer）+ 乱码段落清洗
 ├── prompts.py           # 全部提示词
@@ -79,40 +85,38 @@ flowchart TD
 ├── check_llm.py         # 真实大模型接入自检（读 .env + 真实调用一次）
 ├── web.py               # 网页版入口（FastAPI，复用同一张图与同一套门禁）
 ├── launch.html          # 一键启用启动页（检查后端/模型状态 → 进主界面并弹模型设置）
-├── start.bat            # Windows 一键启动：起后端 + 4 秒后自动打开 /launch
+├── start.bat            # Windows 一键启动：起后端 + 4 秒后自动打开启动页
 ├── index.html           # 单页前端（可直接双击演示；由 web.py 托管时连真实后端）
-├── evaluation/          # 40 题评测集 + 跑分脚本 + eval_report.md
+├── evaluation/          # 40 题评测集 + 跑分脚本 + mock fixture（报告见 开发文档/）
 │   ├── dataset.jsonl    # 测试集（简单事实 / 对比 / 时效 / 多跳，各 10 题）
 │   ├── run_eval.py      # 逐题跑图并统计指标
 │   ├── mock_web.py      # 确定性 fixture（仅测流水线机制）
-│   ├── make_report.py   # 汇总 evaluation/eval_report.md
-│   ├── acceptance_check.py # 9 项功能闭环验收，生成 FUNCTIONAL_ACCEPTANCE.md
-│   ├── kb_check.py      # P0-3 知识库验收：只给 knowledge/，问 6 个只能靠 KB 回答的问题
-│   ├── eval_report.md   # 评测报告（自动生成）
-│   └── results/         # 每次评测的 JSONL / summary / 人工抽样
+│   ├── make_report.py   # 汇总生成评测报告
+│   ├── acceptance_check.py # 9 项功能闭环验收，生成功能验收报告
+│   ├── kb_check.py      # 知识库验收：只给 knowledge/，问 6 个只能靠 KB 回答的问题
+│   └── results/         # 每次评测的 JSONL / summary / 人工抽样（gitignore）
 ├── knowledge/           # 本地知识库（md/txt）：LangGraph HITL、评测口径、RAG 设计
 ├── config/pricing.json  # 模型价目表（元/百万 token，按模型最长前缀匹配）
 ├── data/                # 运行期 SQLite + 知识库索引（已 gitignore）
-├── FUNCTIONAL_ACCEPTANCE.md # 功能验收报告（自动生成）
-├── requirements.txt
-├── pytest.ini
-├── .env.example
-└── tests/
+├── logs/ outbox/        # 运行期日志与 dry-run 产物（已 gitignore）
+├── README.md            # 使用与验收文档（主文档）
+├── PROJECT_SUMMARY.md   # 项目快照
+├── RESUME_ROADMAP.md    # 简历/面试材料
+├── requirements.txt / pytest.ini / .env.example / .gitignore
+└── tests/               # 23 个测试文件 / 166 个用例
     ├── conftest.py
     ├── test_graph_flow.py        # 端到端：三次中断、确认前不写、日志链路、无来源降级
     ├── test_tools_retry.py       # 重试 3 次 + 指数退避 + 耗尽后结构化失败
     ├── test_tools_safety.py      # SSRF：内网 IP / 解析到内网的域名一律拒绝
-    ├── test_web_api.py           # Web API：首页、三次中断、确认前零写入
+    ├── test_web_api.py           # Web API：三次中断、确认前零写入、流式协议
     ├── test_write_guard.py       # 未确认写操作被拒绝 / 参数无法伪造 human_approved
     ├── test_evidence_integrity.py# 编造 URL、改写引文被过滤；报告 URL 白名单清洗
-    ├── test_encoding.py          # GBK/UTF-16 探测、乱码段落丢弃、整页乱码确定性失败
-    ├── test_draft_template.py    # 三段式报告、[S#] 引用、可点击化、来源清单重建
-    ├── test_planning.py          # 检索规划、3~5 个子问题、JSON 解析
-    ├── test_research_quality.py  # P0：覆盖度、缺口补检、claim 支持校验
-    └── test_persistence.py       # P0-1：重启恢复、历史会话 API、多轮上下文
+    ├── test_reporting.py         # 报告质量：卡片化/大纲/引用校验/修复
+    ├── test_persistence.py       # 重启恢复、历史会话、删除与中断状态
+    └── …                          # 其余 15 个测试文件见 tests/ 目录
 ```
 
-## 3. 安装
+
 
 ```bash
 python -m venv .venv
@@ -245,7 +249,7 @@ python check_llm.py --set-key --base-url https://api.deepseek.com/v1 --model dee
 python check_llm.py
 python evaluation/run_eval.py --mode real --llm openai --tag real_llm --limit 10   # 先跑 10 题看质量/成本
 python evaluation/run_eval.py --mode real --llm openai --tag real_llm              # 全量 40 题
-python evaluation/make_report.py                                                    # 更新 eval_report.md
+python evaluation/make_report.py                                                    # 更新 开发文档/eval_report.md
 ```
 
 ## 5. 运行
@@ -324,15 +328,15 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 - 直接双击 `launch.html`（`file://`）也能用：检测不到后端时自动降级为
   「一键启用（静态演示）」，`?history=1` 入口会隐藏（静态模式没有后端）。
 
-![一键启用启动页](docs/web-ui-launch.png)
+![一键启用启动页](原型图/web-ui-launch.png)
 
-![一键启用后自动弹出模型设置](docs/web-ui-launch-settings.png)
+![一键启用后自动弹出模型设置](原型图/web-ui-launch-settings.png)
 
-![静态演示模式的草稿确认界面](docs/web-ui-demo.png)
+![静态演示模式的草稿确认界面](原型图/web-ui-demo.png)
 
 打开 <http://127.0.0.1:8000/index.html> 后的真实流程：
 
-![网页版界面](docs/web-ui.png)
+![网页版界面](原型图/web-ui.png)
 
 1. 输入研究问题 → **开始研究**（页面实时显示结构化日志与进度）；
 2. **草稿确认**：通过并继续 / 填写修改意见重新生成 / 终止流程；
@@ -344,9 +348,9 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 当前百分比；「收起日志 / 展开日志」只折叠日志表格，**进度条与阶段文案始终可见**（默认展开，
 运行中也能收起来省地方）。深链 `?collapse=1` 可直接以收起态打开，`?q=...&autostart=1` 自动跑静态演示。
 
-![执行进度：分段节点进度条](docs/web-ui-progress.png)
+![执行进度：分段节点进度条](原型图/web-ui-progress.png)
 
-![执行进度收起后的样子](docs/web-ui-progress-collapsed.png)
+![执行进度收起后的样子](原型图/web-ui-progress-collapsed.png)
 
 网页与 CLI 共用同一张 LangGraph 图、同一套工具和写操作门禁，后端接口：
 
@@ -381,12 +385,12 @@ uvicorn web:app --host 127.0.0.1 --port 8000
   localStorage/sessionStorage；保存后页面只显示 `sk-****abcd` 这类掩码；
 - **清除运行时配置**：回到启动时 `.env` 的配置。
 
-![模型设置面板](docs/web-ui-settings.png)
+![模型设置面板](原型图/web-ui-settings.png)
 
 > 安全边界：Key 只存在本机后端进程内存，服务重启即失效；接口只监听 `127.0.0.1`，
 > 没有鉴权，不要暴露到公网。`.env` 中的 Key 仍会被读取，请确保 `.env` 不被提交（已在 `.gitignore`）。
 
-![深色主题网页版](docs/web-ui-dark.png)
+![深色主题网页版](原型图/web-ui-dark.png)
 
 ### 5.5.2 会话持久化与多轮追问（P0-1）
 
@@ -406,18 +410,18 @@ uvicorn web:app --host 127.0.0.1 --port 8000
 - 前端尽力调 `POST /api/sessions/{id}/interrupt` 落库；后端重启时还会把遗留的 `running`
   会话统一标成 `interrupted`（进程都换了，不可能还在跑），历史列表不会一直显示「进行中」。
 
-![历史会话：已中断状态与删除按钮](docs/web-ui-history-delete.png)
+![历史会话：已中断状态与删除按钮](原型图/web-ui-history-delete.png)
 
-![后端被杀后的中断态：进度冻结 + 未完成卡片](docs/web-ui-interrupted.png)
+![后端被杀后的中断态：进度冻结 + 未完成卡片](原型图/web-ui-interrupted.png)
 
 多轮追问：`POST /api/research` 带 `parent_thread_id` 时，会读取父会话的结论摘要（问题 + 子问题 + 报告正文，
 截断到 1200 字符）注入本轮 `history_context`，规划阶段据此避免重复检索；响应里的会话行会记录 `parent_thread_id`。
 
-![历史会话抽屉](docs/web-ui-history.png)
+![历史会话抽屉](原型图/web-ui-history.png)
 
 从历史会话点「继续审批」后，页面会还原完整日志与草稿审核面板（会话由上一个进程写入）：
 
-![恢复后的待审批会话](docs/web-ui-recover.png)
+![恢复后的待审批会话](原型图/web-ui-recover.png)
 
 深链：`?history=1` 直接打开历史面板，`?session=<thread_id>` 直接加载某个会话（便于演示和排障）。
 
@@ -446,7 +450,7 @@ curl -X POST http://127.0.0.1:8000/api/research \
 - `final_output` 增加 `token_usage_by_node`、`cost_by_node`、`cost_estimated`、`cost_price_source`；
 - 节点 token 之和等于运行总量（有单测断言），未知模型不会抛异常。
 
-![调用链 Trace](docs/web-ui-trace.png)
+![调用链 Trace](原型图/web-ui-trace.png)
 
 ### 5.5.4 本地知识库 RAG（P0-3）
 
@@ -466,7 +470,7 @@ curl -X POST http://127.0.0.1:8000/api/research \
 python evaluation/kb_check.py   # 6/6 passed
 ```
 
-![知识库来源与调用链](docs/web-ui-rag.png)
+![知识库来源与调用链](原型图/web-ui-rag.png)
 
 ### 5.6 常见问题：`ModuleNotFoundError: No module named 'fastapi'`
 
@@ -646,8 +650,8 @@ pytest -q
 | 子问题覆盖 / 缺口补检（P0）       | `check_coverage` + `quality.compute_coverage`；覆盖率/轮次写入 `final_output`                     |
 | claim 支持性校验（P0）         | `quality.verify_evidence`；支持率写入 `final_output.verification`                              |
 | 可观测（token/成本/耗时）        | `final_output` 含 `token_usage / cost_cny / duration_ms / log_summary`                       |
-| 40 题评测 + 报告             | `evaluation/`：`run_eval.py` + `make_report.py` → `evaluation/eval_report.md`               |
-| 9 项功能闭环验收             | `evaluation/acceptance_check.py` → [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) |
+| 40 题评测 + 报告             | `evaluation/`：`run_eval.py` + `make_report.py` → `开发文档/eval_report.md`               |
+| 9 项功能闭环验收             | `evaluation/acceptance_check.py` → [开发文档/FUNCTIONAL_ACCEPTANCE.md](开发文档/FUNCTIONAL_ACCEPTANCE.md) |
 | 会话持久化 / 重启恢复（P0-1）     | `persistence.py` + `web.py`：SQLite checkpointer；`tests/test_persistence.py` |
 | 调用链 Trace / 节点成本（P0-2）  | `tracing.py` + `graph._instrument`；`/api/trace`、`/api/cost/summary`、`config/pricing.json` |
 | 知识库混合检索（P0-3）         | `rag.py` + `retrieve_knowledge`；`knowledge/`、`evaluation/kb_check.py`（6/6） |
@@ -676,7 +680,7 @@ pytest -q
 
 `evaluation/dataset.jsonl` 收录 40 道题（简单事实 / 对比分析 / 时效性 / 多跳推理各 10 题），
 `evaluation/run_eval.py` 逐题跑完整图并统计验收指标，`evaluation/make_report.py` 生成
-**[evaluation/eval_report.md](evaluation/eval_report.md)**（测试集说明、指标定义、当前结果、失败案例、消融对比）。
+**[开发文档/eval_report.md](开发文档/eval_report.md)**（测试集说明、指标定义、当前结果、失败案例、消融对比）。
 
 ```bash
 # 本地确定性 fixture：验证流水线、引用、去重、延迟（快）
@@ -690,7 +694,7 @@ python evaluation/run_eval.py --mode real --tag real_p0
 # 真实联网 + 真实大模型（读取 .env；先跑 check_llm.py）
 python evaluation/run_eval.py --mode real --llm openai --tag real_llm --limit 10
 python evaluation/make_report.py
-# 功能闭环验收（9 项逐条检查，生成 FUNCTIONAL_ACCEPTANCE.md）
+# 功能闭环验收（9 项逐条检查，生成 开发文档/FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/acceptance_check.py
 ```
 
@@ -703,4 +707,4 @@ P0 追加：子问题证据覆盖率、证据断言支持率、平均检索轮�
 引用可追溯/可点击 **100%**、工具调用正确率 **90.0%**、多跳类 **70.0%**、
 子问题覆盖率 **51.2%**、断言支持率 **99.4%**、平均 **1.68 轮**、P95 **26.7s**。
 相比 `real_after_360`：成功率 +2.5pp、多跳 +10pp、事实覆盖 +5pp；覆盖率仍未达到 75% 目标，
-主要受“对比题只抓到一方 / 站点 403/JS 空页”限制，见 [OPTIMIZATION.md](OPTIMIZATION.md) 第 9 节。
+主要受“对比题只抓到一方 / 站点 403/JS 空页”限制，见 [开发文档/OPTIMIZATION.md](开发文档/OPTIMIZATION.md) 第 9 节。

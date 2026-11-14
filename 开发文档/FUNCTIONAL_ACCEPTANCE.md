@@ -1,6 +1,6 @@
 # 功能验收报告（必须闭环）
 
-> 自动生成：`python evaluation/acceptance_check.py`。环境：离线 LLM + 确定性 mock 网页，不依赖外网，可重复执行；真实联网效果见 [evaluation/eval_report.md](evaluation/eval_report.md)。
+> 自动生成：`python evaluation/acceptance_check.py`。环境：离线 LLM + 确定性 mock 网页，不依赖外网，可重复执行；真实联网效果见 [eval_report.md](eval_report.md)。
 
 ## 结论：9/9 项通过
 
