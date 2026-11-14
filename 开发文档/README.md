@@ -9,6 +9,9 @@
 | --- | --- | --- |
 | [接口文档.md](接口文档.md) | 全部 HTTP/NDJSON 接口：页面路由、流式协议、研究/会话/Trace/配置接口、人工确认载荷、示例 | 手写，随接口变更同步 |
 | [数据库设计文档.md](数据库设计文档.md) | 存储总览、`sessions.sqlite`、`checkpoints.sqlite`（LangGraph）、`kb_index.json`、JSONL 日志/trace、生命周期 | 手写，随 schema 变更同步 |
+| [质量与可靠性设计.md](质量与可靠性设计.md) | 结构化日志字段、重试/降级、编码清洗、防编造四重约束、证据提取与报告分节、消融开关 | 手写（原 README §6–8） |
+| [测试与验收.md](测试与验收.md) | 测试分层表、公共夹具、9 项功能验收对照、当前 166 用例/9-9/6-6 | 手写（原 README §9–10） |
+| [评测方法.md](评测方法.md) | 40 题数据集、mock/real/real+llm 三种模式、指标定义、最新结果与口径限制 | 手写（原 README §12） |
 | [OPTIMIZATION.md](OPTIMIZATION.md) | 优化路线图 + 历次改造实施记录（P0、P0-1/2/3、报告质量、UI 等） | 手写 |
 | [VERIFICATION_REPORT.md](VERIFICATION_REPORT.md) | 早期独立验收报告（历史存档，保留原始数字） | 存档 |
 | [FUNCTIONAL_ACCEPTANCE.md](FUNCTIONAL_ACCEPTANCE.md) | 9 项功能闭环验收报告 | 由 `evaluation/acceptance_check.py` 生成（见下） |
