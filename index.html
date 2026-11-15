@@ -516,6 +516,7 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: .001ms !important;
+      animation-delay: 0s !important;
       animation-iteration-count: 1 !important;
       transition-duration: .001ms !important;
     }
@@ -682,6 +683,29 @@
   }
   .btn:hover:not(:disabled) { transform: translateY(-1px); }
   .btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; }
+
+  /* 执行进度：日志区平滑收拢（grid-template-rows 0fr -> 1fr）
+     progress-log 自身的 hidden 语义保留（收起结束后才真正隐藏），视觉动画由外层承担 */
+  #log-collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows .32s cubic-bezier(.22, .61, .36, 1);
+  }
+  #progress-card.collapsed #log-collapse { grid-template-rows: 0fr; }
+  .log-collapse-inner { overflow: hidden; min-height: 0; }
+  #progress-card.collapsed .log-collapse-inner { opacity: 0; transition: opacity .18s ease; }
+
+  /* 首屏入场：逐级落定（纯 CSS，减少动态效果时自动跳过） */
+  @keyframes intro-rise {
+    from { opacity: 0; transform: translateY(calc(14 * var(--u))); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  header.top .brand { animation: intro-rise .6s cubic-bezier(.22, .61, .36, 1) both; }
+  header.top .top-actions { animation: intro-rise .6s cubic-bezier(.22, .61, .36, 1) .08s both; }
+  .hero .eyebrow { animation: intro-rise .55s cubic-bezier(.22, .61, .36, 1) .14s both; }
+  .hero h2 { animation: intro-rise .62s cubic-bezier(.22, .61, .36, 1) .2s both; }
+  .hero-copy { animation: intro-rise .55s cubic-bezier(.22, .61, .36, 1) .28s both; }
+  .hero-stats { animation: intro-rise .55s cubic-bezier(.22, .61, .36, 1) .36s both; }
   .btn.primary { box-shadow: 0 10px 26px rgba(37, 99, 235, .30), 0 0 20px rgba(34, 211, 238, .14); }
   .btn.primary:hover:not(:disabled) {
     filter: brightness(1.08);
@@ -814,13 +838,17 @@
       </div>
       <div class="seg-bar" id="seg-bar" role="progressbar" aria-valuemin="0" aria-valuemax="14"
         aria-valuenow="0" aria-label="研究流程进度"></div>
-      <div class="log-wrap" id="progress-log">
-        <table class="log-table">
-          <thead>
-            <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
-          </thead>
-          <tbody id="log-body"></tbody>
-        </table>
+      <div id="log-collapse">
+        <div class="log-collapse-inner">
+          <div class="log-wrap" id="progress-log">
+            <table class="log-table">
+              <thead>
+                <tr><th>step_id</th><th>节点</th><th>工具</th><th>状态</th><th>重试</th><th>耗时</th><th>错误</th></tr>
+              </thead>
+              <tbody id="log-body"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1084,6 +1112,7 @@
   let progressFailed = false;      // 本次运行是否失败（进度条文案要显示“失败”）
   let progressInterrupted = false; // 后端退出/断网：进度冻结 + 红色中断标记
   let progressCollapsed = false;   // 手动收起状态（默认展开）
+  let logHideTimer = null;         // 收起动画结束后再隐藏日志的计时器
   let progressState = { node: "", steps: 0, percent: 0 };
 
   function buildSegments() {
@@ -1175,10 +1204,27 @@
   function setProgressCollapsed(collapsed) {
     progressCollapsed = collapsed;
     // 收起的是日志表格，进度条与阶段文案始终可见
-    $("progress-log").hidden = collapsed;
-    $("progress-card").classList.toggle("collapsed", collapsed);
+    const card = $("progress-card");
+    const log = $("progress-log");
     $("progress-toggle-text").textContent = collapsed ? "展开日志" : "收起日志";
     $("progress-toggle").setAttribute("aria-expanded", String(!collapsed));
+    clearTimeout(logHideTimer);
+    if (collapsed) {
+      // 先让外层 grid 高度过渡到 0，过渡结束再把日志真正标记为 hidden
+      // （进度条 + 阶段文案保留，日志区缩到 0 高）
+      if (!card) { $("progress-log").hidden = collapsed; return; }
+      card.classList.add("collapsed");
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      logHideTimer = setTimeout(() => {
+        if (progressCollapsed) $("progress-log").hidden = collapsed;
+      }, reduce ? 0 : 340);
+    } else {
+      log.hidden = false;
+      // 下一帧再放开高度，0fr -> 1fr 才会走过渡
+      requestAnimationFrame(() => {
+        $("progress-card").classList.remove("collapsed");
+      });
+    }
   }
 
   function escapeHtml(text) {
