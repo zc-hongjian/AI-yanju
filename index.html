@@ -957,6 +957,127 @@
     .card-ico { width: 28px; height: 28px; font-size: 13px; }
     .stage-percent { font-size: 28px; }
   }
+
+  /* ============================================================
+     P3 版式：搜索式首页（landing） / 工作区（workspace）双形态
+     首页：居中 hero + 大玻璃搜索台 + 2x2 能力卡
+     工作区：隐藏 hero 与能力卡，输入台收窄成一条，下面是流水线卡片
+     ============================================================ */
+  body.mode-workspace .landing-only { display: none; }
+
+  /* ---------- 首页 hero 居中 ---------- */
+  body:not(.mode-workspace) .hero {
+    text-align: center;
+    padding-top: calc(30 * var(--u));
+  }
+  body:not(.mode-workspace) .hero-copy { margin-left: auto; margin-right: auto; }
+  body:not(.mode-workspace) .hero-stats { justify-content: center; }
+  body:not(.mode-workspace) .hero-status { margin-left: 0; }
+  body:not(.mode-workspace) main { padding-top: calc(14 * var(--u)); }
+
+  /* ---------- 大玻璃搜索台 ---------- */
+  body:not(.mode-workspace) .ask-card {
+    width: 100%;
+    max-width: calc(880 * var(--u));
+    margin: calc(22 * var(--u)) auto 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  body:not(.mode-workspace) .ask-card::before { display: none; }
+  body:not(.mode-workspace) .ask-card .card-head { display: none; }
+  body:not(.mode-workspace) .ask-card .ask-field textarea { min-height: calc(88 * var(--u)); }
+  body:not(.mode-workspace) .ask-row { position: relative; }
+  body:not(.mode-workspace) .ask-field textarea {
+    min-height: calc(88 * var(--u));
+    padding: calc(11 * var(--u)) calc(158 * var(--u)) calc(11 * var(--u)) calc(48 * var(--u));
+    border-radius: 999px;
+    font-size: 15.5px;
+    background: rgba(148, 163, 184, .07);
+    border: 1px solid rgba(255, 255, 255, .13);
+    box-shadow: 0 20px 54px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .05);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+  body:not(.mode-workspace) .ask-field textarea:focus {
+    background: rgba(148, 163, 184, .10);
+    border-color: rgba(34, 211, 238, .55);
+    box-shadow: 0 0 0 4px rgba(34, 211, 238, .12), 0 20px 54px rgba(0, 0, 0, .42);
+  }
+  body:not(.mode-workspace) .ask-card .ask-icon { left: calc(19 * var(--u)); }
+  body:not(.mode-workspace) .ask-card .start-btn {
+    position: absolute; right: calc(9 * var(--u)); top: 50%;
+    transform: translateY(-50%);
+    padding: calc(13 * var(--u)) calc(24 * var(--u));
+    border-radius: 999px;
+    font-size: 14.5px;
+  }
+  body:not(.mode-workspace) .ask-card .start-btn:hover:not(:disabled) { transform: translateY(calc(-50% - 1px)); }
+  body:not(.mode-workspace) .examples { justify-content: center; margin-top: calc(15 * var(--u)); }
+  body:not(.mode-workspace) .ask-card .hint { text-align: center; }
+
+  /* ---------- 2x2 能力胶囊卡 ---------- */
+  .features {
+    width: 100%;
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: calc(16 * var(--u));
+    max-width: calc(880 * var(--u));
+    margin: calc(24 * var(--u)) auto 0;
+  }
+  .feature {
+    display: flex; align-items: center; gap: calc(16 * var(--u));
+    padding: calc(17 * var(--u)) calc(24 * var(--u));
+    border-radius: 999px;
+    background: linear-gradient(150deg, rgba(17, 27, 48, .84), rgba(9, 15, 28, .76));
+    border: 1px solid var(--line);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .03);
+    transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+  }
+  .feature:hover {
+    border-color: rgba(34, 211, 238, .34);
+    transform: translateY(-2px);
+    box-shadow: 0 24px 54px rgba(0, 0, 0, .44), inset 0 1px 0 rgba(255, 255, 255, .05);
+  }
+  .feature-ico {
+    flex: none; display: grid; place-items: center;
+    width: calc(54 * var(--u)); height: calc(54 * var(--u));
+    border-radius: 50%;
+    font-size: calc(23 * var(--u)); line-height: 1;
+    background: radial-gradient(circle at 32% 26%, rgba(34, 211, 238, .26), rgba(139, 92, 246, .16));
+    border: 1px solid rgba(34, 211, 238, .22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+  }
+  .feature h3 { margin: 0 0 3px; font-size: 15.5px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
+  .feature p { margin: 0; font-size: 12.8px; line-height: 1.52; color: var(--muted); }
+
+  /* ---------- 工作区：输入台收成一条 ---------- */
+  body.mode-workspace .ask-card { padding: calc(16 * var(--u)) calc(20 * var(--u)); }
+  body.mode-workspace .ask-card .card-head { margin-bottom: calc(10 * var(--u)); }
+  body.mode-workspace .examples { display: none; }
+  body.mode-workspace .ask-field textarea { min-height: calc(62 * var(--u)); }
+  body.mode-workspace .hero { display: none; }
+
+  /* ---------- 小屏 ---------- */
+  @media (max-width: 900px) {
+    .features { grid-template-columns: 1fr; gap: 12px; }
+    .feature { border-radius: 26px; padding: 14px 18px; }
+    body:not(.mode-workspace) .ask-card { border-radius: 24px; padding: 12px; }
+    body:not(.mode-workspace) .ask-field textarea {
+      min-height: 82px; border-radius: 22px;
+      padding: 12px 16px 12px 42px;
+    }
+    body:not(.mode-workspace) .ask-card .start-btn {
+      position: static; transform: none; width: 100%;
+      margin-top: 10px; padding: 12px 18px; border-radius: 14px;
+    }
+    body:not(.mode-workspace) .ask-card .start-btn:hover:not(:disabled) { transform: translateY(-1px); }
+    body:not(.mode-workspace) .ask-card .ask-icon { left: 15px; top: 30px; transform: none; }
+    body:not(.mode-workspace) .examples { justify-content: flex-start; }
+    body:not(.mode-workspace) .ask-card .hint { text-align: left; }
+  }
 </style>
 </head>
 <body>
@@ -1003,7 +1124,7 @@
 </header>
 
 <main class="wrap">
-  <section class="hero">
+  <section class="hero landing-only">
     <p class="eyebrow">RESEARCH AGENT · HUMAN IN THE LOOP</p>
     <h2>把一个问题，变成一份<br><span>带来源、可复核</span>的研究报告</h2>
     <p class="hero-copy">先拆解、再检索、再抓取；证据不足会补检，结论必须能回到原文。邮件与 Notion 只在你逐项确认后写入。</p>
@@ -1029,7 +1150,7 @@
     <div class="ask-row">
       <div class="ask-field">
         <span class="ask-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg></span>
-        <textarea id="question" rows="2" placeholder="例如：LangGraph 如何实现人工中断（human-in-the-loop）？"></textarea>
+        <textarea id="question" rows="2" aria-label="研究问题" placeholder="例如：LangGraph 如何实现人工中断？"></textarea>
       </div>
       <button id="start-btn" class="btn primary start-btn">开始研究</button>
     </div>
@@ -1039,6 +1160,37 @@
       <button type="button" class="example" data-q="2025 年 AI Agent 在企业落地的主要挑战是什么？">2025 AI Agent 落地挑战</button>
     </div>
     <p class="hint">写操作（发邮件 / 存 Notion）只有在你逐项确认后才会执行；未配置凭据时写入 outbox/（dry-run）。</p>
+  </section>
+
+  <section class="features landing-only" aria-label="能力概览">
+    <article class="feature">
+      <span class="feature-ico" aria-hidden="true">🔍</span>
+      <div>
+        <h3>多轮检索</h3>
+        <p>子问题拆解，证据不足自动补检</p>
+      </div>
+    </article>
+    <article class="feature">
+      <span class="feature-ico" aria-hidden="true">📎</span>
+      <div>
+        <h3>证据与引用</h3>
+        <p>结论可回溯原文，[S#] 角标硬校验</p>
+      </div>
+    </article>
+    <article class="feature">
+      <span class="feature-ico" aria-hidden="true">🧑‍⚖️</span>
+      <div>
+        <h3>三道人工闸门</h3>
+        <p>草稿 / 邮件 / Notion 逐项确认</p>
+      </div>
+    </article>
+    <article class="feature">
+      <span class="feature-ico" aria-hidden="true">📈</span>
+      <div>
+        <h3>成本与 Trace</h3>
+        <p>节点耗时、token、成本可查</p>
+      </div>
+    </article>
   </section>
 
   <section class="card" id="history-card" hidden>
@@ -1759,6 +1911,7 @@
     list.innerHTML = '<p class="muted">正在加载会话 ' + escapeHtml(sessionThreadId) + "…</p>";
     try {
       const data = await fetchJson("/api/sessions/" + encodeURIComponent(sessionThreadId));
+      setLayout("workspace");
       threadId = data.thread_id || sessionThreadId;
       $("progress-card").hidden = false;
       render(data);
@@ -1849,6 +2002,7 @@
   }
 
   function openHistory() {
+    setLayout("workspace");
     $("history-card").hidden = false;
     $("history-card").scrollIntoView({ behavior: "smooth", block: "start" });
     loadHistory();
@@ -2049,7 +2203,13 @@
     $("final-card").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // 首页（搜索式）与工作区（流水线）两种形态
+  function setLayout(mode) {
+    document.body.classList.toggle("mode-workspace", mode === "workspace");
+  }
+
   function resetAll() {
+    setLayout("landing");
     threadId = null;
     currentInterrupt = null;
     currentFinal = null;
@@ -2074,6 +2234,7 @@
     clearError();
     const question = $("question").value.trim();
     if (!question) { showError("请先输入研究问题。"); return; }
+    setLayout("workspace");
     if (demoMode) { startDemoResearch(question); return; }
     sessionQuestion = question;
     threadId = null;
@@ -2201,6 +2362,7 @@
   }
 
   function startDemoResearch(question) {
+    setLayout("workspace");
     demoQuestion = question;
     demoStage = "draft";
     demoRevision = 0;
