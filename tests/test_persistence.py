@@ -1,6 +1,6 @@
 """会话持久化测试：SQLite checkpointer 重启恢复、历史会话 API、多轮上下文。
 
-覆盖的验收点（对应 RESUME_ROADMAP.md §6）：
+覆盖的验收点：
 1. 换一个新图实例（模拟服务重启）后，仍能从人工审批中断处 resume；
 2. /api/sessions 能列出刚创建的会话，/api/sessions/{id} 能加载中断载荷；
 3. 重启后 /api/resume/stream 不再 400（trace_id 从会话索引回源）；

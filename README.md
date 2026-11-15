@@ -338,9 +338,8 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 | [原型图/](原型图/) | 15 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 23 个测试文件 / 166 用例 |
+| [tests/](tests/) | 24 个测试文件 / 171 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
-| [RESUME_ROADMAP.md](RESUME_ROADMAP.md) | 简历 STAR 话术与面试问答（个人向） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 
 ## 已知限制
@@ -378,4 +377,4 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ---
 
 > 文档分工：本 README 面向“快速了解与上手”；开发细节在 [开发文档/](开发文档/)；
-> 项目全貌在 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)；简历/面试材料在 [RESUME_ROADMAP.md](RESUME_ROADMAP.md)。
+> 项目全貌在 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)。

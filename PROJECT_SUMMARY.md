@@ -63,10 +63,9 @@ AI-hy/
 ├── knowledge/            # 本地知识库（3 篇 md）
 ├── config/pricing.json   # 模型价目表
 ├── data/ logs/ outbox/   # 运行期产物（gitignore）
-├── tests/                # 23 个测试文件 / 166 个用例
+├── tests/                # 24 个测试文件 / 171 个用例
 ├── README.md             # 使用与验收文档
 ├── PROJECT_SUMMARY.md    # 本文
-├── RESUME_ROADMAP.md     # 简历/面试材料
 ├── requirements.txt
 ├── pytest.ini
 └── .env.example          # 环境变量模板（真实 Key 只在被忽略的 .env）
