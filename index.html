@@ -4,20 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LangGraph 研究助手</title>
-<style>
-  :root {
-    --bg: #f4f6f9;
-    --card: #ffffff;
-    --ink: #17202a;
-    --muted: #6b7785;
-    --line: #e3e8ef;
-    --accent: #2563eb;
-    --accent-soft: #eff4ff;
-    --green: #0f9d58;
-    --amber: #b7791f;
-    --red: #d93025;
-    --gray: #8a94a6;
-  }
+<style id="theme-dark">
+  /* ============================================================
+     下表 = 早期浅色基线（提供布局，勿删）+ 深色覆盖层，顺序不可调换：
+     深色段只写颜色/阴影/圆角等视觉覆盖，布局属性都在基线里。
+     ============================================================ */
+
+  /* 浅色 token 已移除：最终 token 见深色段的 :root */
+
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -147,9 +141,9 @@
     .ask-row { flex-direction: column; }
     .grid2 { grid-template-columns: 1fr; }
   }
-</style>
-<style id="theme-dark">
-  :root {
+
+  /* ================= 深色覆盖层（视觉 token 入口） ================= */
+:root {
     --bg: #05070d;
     --bg-2: #0a1120;
     --card: rgba(15, 23, 42, .72);
@@ -585,9 +579,160 @@
     .modal-actions .btn { flex: 1 1 100%; }
     .history-row { flex-wrap: wrap; }
   }
+
+  /* ============================================================
+     P0 视觉层：背景氛围 / 排版节奏 / 按钮体系统一
+     只覆盖视觉属性，不改布局；选择器都排在上面两段之后，优先级更高
+     ============================================================ */
+  :root {
+    /* 等比单位：参考稿宽 1778，窄屏锁定，装饰元素全部乘 --u */
+    --u: calc(min(100vw, 2200px) / 1778);
+    --bg: #05070d;
+    --card: rgba(13, 21, 38, .78);
+    --card-2: rgba(9, 15, 28, .88);
+    --ink: #e8eef8;
+    --muted: #8ba0bd;
+    --line: rgba(148, 163, 184, .14);
+    --line-strong: rgba(148, 163, 184, .26);
+    --glow: 0 0 0 1px rgba(34, 211, 238, .20), 0 24px 60px rgba(0, 0, 0, .50);
+  }
+
+  /* 背景：底色铺到 html 上、body 透明，装饰层才能透出来 */
+  html { background: var(--bg); }
+  body { background: transparent; }
+  body::before { opacity: .45; }
+
+  /* 装饰层：中央辉光 + 阶梯光条 + 顶边光溢（fixed，不挡点击） */
+  .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .bg .glow {
+    position: absolute; left: 50%; top: calc(92 * var(--u));
+    width: calc(740 * var(--u)); height: calc(950 * var(--u));
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(34, 211, 238, .16), rgba(34, 211, 238, .05) 55%, transparent 74%);
+  }
+  .bg .glow-2 {
+    position: absolute; top: calc(-90 * var(--u)); right: calc(-60 * var(--u));
+    width: calc(620 * var(--u)); height: calc(520 * var(--u));
+    background: radial-gradient(closest-side, rgba(139, 92, 246, .16), transparent 70%);
+  }
+  .bg .bars {
+    position: absolute; top: 0; left: 0; right: 0; height: calc(655 * var(--u));
+    -webkit-mask-image: linear-gradient(to bottom, #000 18%, transparent 96%);
+    mask-image: linear-gradient(to bottom, #000 18%, transparent 96%);
+  }
+  .bg .bars span[data-n="5"] { display: none; }
+  .bg .bars span {
+    position: absolute; top: 0;
+    width: calc(var(--w) * var(--u));
+    height: calc(var(--h) * var(--u));
+    border-radius: 0 0 calc(24 * var(--u)) calc(24 * var(--u));
+    background: linear-gradient(180deg, rgba(34, 211, 238, .12), rgba(34, 211, 238, .03) 50%, rgba(34, 211, 238, 0) 82%);
+    filter: blur(calc(20 * var(--u)));
+  }
+  .bg .bars .l { left: calc(var(--l) * var(--u)); }
+  .bg .bars .r { right: calc(var(--l) * var(--u)); }
+  .bg .spill {
+    position: absolute; top: 0; left: 0; right: 0; height: calc(150 * var(--u));
+    background: linear-gradient(180deg, rgba(34, 211, 238, .09), rgba(34, 211, 238, 0));
+  }
+
+  /* 顶部导航：更实的玻璃 + 底部发丝光 */
+  header.top {
+    background: linear-gradient(180deg, rgba(5, 7, 13, .94), rgba(5, 7, 13, .64));
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .38);
+    padding: calc(16 * var(--u)) 0 calc(15 * var(--u));
+  }
+  header.top::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(34, 211, 238, .34), rgba(139, 92, 246, .26), transparent);
+  }
+  .logo {
+    width: calc(44 * var(--u)); height: calc(44 * var(--u));
+    border-radius: calc(14 * var(--u));
+  }
+  .pill { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .settings-btn { border-radius: 999px; }
+
+  /* 主视觉排版：更大的标题、更紧的行距与字距 */
+  main { padding: calc(26 * var(--u)) 0 calc(54 * var(--u)); gap: calc(20 * var(--u)); }
+  .hero { padding: calc(20 * var(--u)) calc(4 * var(--u)) calc(8 * var(--u)); }
+  .eyebrow { letter-spacing: .24em; opacity: .92; }
+  .hero h2 {
+    font-size: clamp(30px, calc(52 * var(--u)), 46px);
+    line-height: 1.18;
+    letter-spacing: -.035em;
+  }
+  .hero-copy { max-width: 72ch; }
+
+  /* 卡片：统一圆角与玻璃厚度，加一道内高光让边缘不发灰 */
+  .card {
+    border-radius: calc(20 * var(--u));
+    padding: calc(22 * var(--u)) calc(24 * var(--u));
+    background: linear-gradient(180deg, rgba(17, 27, 48, .84), rgba(9, 15, 28, .80));
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .025);
+  }
+  .card-head { margin-bottom: calc(14 * var(--u)); }
+
+  /* 按钮体系：统一圆角/内边距，hover 抬 1px，主按钮带外发光 */
+  .btn {
+    border-radius: calc(12 * var(--u));
+    padding: calc(10 * var(--u)) calc(18 * var(--u));
+    transition: transform .14s ease, box-shadow .16s ease, background .16s ease,
+      border-color .16s ease, filter .16s ease;
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; }
+  .btn.primary { box-shadow: 0 10px 26px rgba(37, 99, 235, .30), 0 0 20px rgba(34, 211, 238, .14); }
+  .btn.primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    box-shadow: 0 14px 34px rgba(37, 99, 235, .36), 0 0 26px rgba(34, 211, 238, .22);
+  }
+  .ask-row textarea { border-radius: calc(13 * var(--u)); }
+
+  /* 进度：进度条与百分比更清晰 */
+  .stage-percent { font-size: calc(22 * var(--u)); letter-spacing: -.02em; }
+  .seg-bar { gap: calc(5 * var(--u)); margin-bottom: calc(16 * var(--u)); }
+  .seg-cell { height: 10px; }
+  .stage-emoji { font-size: calc(28 * var(--u)); }
+
+  /* 历史 / 弹层 / 细节 */
+  .history-row {
+    transition: transform .16s ease, border-color .16s ease, background .16s ease;
+  }
+  .history-row:hover { transform: translateY(-1px); }
+  .modal { border-radius: calc(20 * var(--u)); }
+  .draft, .log-wrap, pre { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .32) transparent; }
+  ::selection { background: rgba(34, 211, 238, .28); color: #f2f7ff; }
+
+  /* 窄屏锁定 --u，和启动页一致 */
+  @media (max-width: 1199px) { :root { --u: .82px; } }
+  @media (max-width: 767px) {
+    :root { --u: .8px; }
+    .hero h2 { font-size: clamp(24px, 7.2vw, 32px); letter-spacing: -.03em; }
+    .bg .bars span[data-n="4"] { display: none; }
+  }
 </style>
 </head>
 <body>
+
+<div class="bg" aria-hidden="true">
+    <div class="glow"></div>
+    <div class="glow-2"></div>
+    <div class="bars">
+      <span class="l" data-n="1" style="--l:0;--w:98;--h:240"></span>
+      <span class="l" data-n="2" style="--l:104;--w:94;--h:200"></span>
+      <span class="l" data-n="3" style="--l:208;--w:90;--h:160"></span>
+      <span class="l" data-n="4" style="--l:312;--w:86;--h:120"></span>
+      <span class="l" data-n="5" style="--l:416;--w:82;--h:90"></span>
+      <span class="r" data-n="1" style="--l:0;--w:98;--h:240"></span>
+      <span class="r" data-n="2" style="--l:104;--w:94;--h:200"></span>
+      <span class="r" data-n="3" style="--l:208;--w:90;--h:160"></span>
+      <span class="r" data-n="4" style="--l:312;--w:86;--h:120"></span>
+      <span class="r" data-n="5" style="--l:416;--w:82;--h:90"></span>
+    </div>
+    <div class="glow-3"></div>
+    <div class="spill"></div>
+</div>
 
 <header class="top">
   <div class="wrap top-inner">
