@@ -627,7 +627,7 @@
     width: calc(var(--w) * var(--u));
     height: calc(var(--h) * var(--u));
     border-radius: 0 0 calc(24 * var(--u)) calc(24 * var(--u));
-    background: linear-gradient(180deg, rgba(34, 211, 238, .12), rgba(34, 211, 238, .03) 50%, rgba(34, 211, 238, 0) 82%);
+    background: linear-gradient(180deg, rgba(34, 211, 238, .10), rgba(34, 211, 238, .025) 50%, rgba(34, 211, 238, 0) 82%);
     filter: blur(calc(20 * var(--u)));
   }
   .bg .bars .l { left: calc(var(--l) * var(--u)); }
@@ -695,6 +695,24 @@
   .log-collapse-inner { overflow: hidden; min-height: 0; }
   #progress-card.collapsed .log-collapse-inner { opacity: 0; transition: opacity .18s ease; }
 
+  /* 报告正文：限制阅读宽度（约 46em ≈ 45 个汉字），居中成文档列；
+     行高、段距、标题节奏一起调，滚动容器放宽到 68vh 便于长报告阅读 */
+  .draft {
+    max-width: 46em;
+    margin-inline: auto;
+    max-height: min(68vh, 760px);
+    font-size: 15.5px;
+    line-height: 1.82;
+  }
+  .draft h2 { margin: calc(22 * var(--u)) 0 calc(10 * var(--u)); }
+  .draft h3 { margin: calc(20 * var(--u)) 0 calc(8 * var(--u)); }
+  .draft h4, .draft h5 { margin: calc(16 * var(--u)) 0 calc(6 * var(--u)); }
+  .draft p { margin: calc(10 * var(--u)) 0; }
+  .draft li { margin: calc(6 * var(--u)) 0; }
+  .draft ul, .draft ol { margin: calc(10 * var(--u)) 0; }
+  .draft blockquote { margin: calc(14 * var(--u)) 0; }
+  .draft .md-table { font-size: 13px; }
+
   /* 首屏入场：逐级落定（纯 CSS，减少动态效果时自动跳过） */
   @keyframes intro-rise {
     from { opacity: 0; transform: translateY(calc(14 * var(--u))); }
@@ -735,6 +753,210 @@
     .hero h2 { font-size: clamp(24px, 7.2vw, 32px); letter-spacing: -.03em; }
     .bg .bars span[data-n="4"] { display: none; }
   }
+
+  /* ============================================================
+     P2 美术层：玻璃导航 / 玻璃输入台 / 卡片图标碟 / 层次与强调
+     仍沿用青紫主色，只把「层次、玻璃、图标、比例」做出来
+     ============================================================ */
+  :root {
+    --r-card: calc(22 * var(--u));
+    --glass-1: rgba(148, 163, 184, .06);
+    --glass-2: rgba(148, 163, 184, .11);
+    --line-soft: rgba(148, 163, 184, .12);
+    --ink-2: #c7d5e8;
+    --shadow-card: 0 26px 64px rgba(0, 0, 0, .46), inset 0 1px 0 rgba(255, 255, 255, .035);
+  }
+
+  /* ---------- 背景暗角：四角压暗，中间更聚焦 ---------- */
+  .bg::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(130% 95% at 50% 26%, transparent 42%, rgba(3, 6, 12, .62) 100%);
+  }
+
+  /* ---------- 顶部：发丝光 + 玻璃导航胶囊 ---------- */
+  header.top::before {
+    content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(34, 211, 238, .50), rgba(139, 92, 246, .45), transparent);
+  }
+  .nav-pill {
+    display: flex; align-items: center; gap: 2px;
+    padding: 3px; border-radius: 999px;
+    background: var(--glass-1);
+    border: 1px solid var(--line-soft);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .nav-pill .btn.ghost {
+    border: 0; background: transparent; border-radius: 999px;
+    padding: calc(7 * var(--u)) calc(14 * var(--u));
+    color: var(--ink-2); font-size: 13px; box-shadow: none;
+  }
+  .nav-pill .btn.ghost:hover:not(:disabled) {
+    color: #ecfeff; background: var(--glass-2); transform: none;
+    box-shadow: inset 0 0 0 1px rgba(34, 211, 238, .18);
+  }
+  .brand .logo {
+    box-shadow: 0 10px 28px rgba(34, 211, 238, .24), inset 0 0 0 1px rgba(255, 255, 255, .18);
+  }
+
+  /* ---------- Hero：标签胶囊、更大标题、数据胶囊 ---------- */
+  .hero .eyebrow {
+    display: inline-flex; align-items: center; gap: calc(8 * var(--u));
+    padding: calc(6 * var(--u)) calc(14 * var(--u));
+    border-radius: 999px;
+    background: rgba(34, 211, 238, .07);
+    border: 1px solid rgba(34, 211, 238, .22);
+    color: #86e9f8; font-size: 10.5px; letter-spacing: .18em;
+  }
+  .hero .eyebrow::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(34, 211, 238, .9);
+  }
+  .hero h2 {
+    font-size: clamp(34px, calc(56 * var(--u)), 54px);
+    line-height: 1.13;
+    letter-spacing: -.045em;
+    margin-bottom: calc(14 * var(--u));
+  }
+  .hero-copy { font-size: 15px; color: #9fb2cc; max-width: 66ch; }
+  .hero-stats { gap: calc(9 * var(--u)); margin-top: calc(18 * var(--u)); }
+  .hero-stats > span:not(.hero-status) {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: calc(7 * var(--u)) calc(13 * var(--u));
+    border-radius: 999px;
+    background: var(--glass-1);
+    border: 1px solid var(--line-soft);
+    font-size: 12.5px; color: #9fb2cc;
+  }
+  .hero-stats > span:not(.hero-status) i { font-style: normal; font-size: 13px; }
+  .hero-stats > span:not(.hero-status) strong { font-size: 15px; color: #eaf2ff; }
+  .hero-status {
+    padding: calc(7 * var(--u)) calc(13 * var(--u));
+    border-radius: 999px; font-size: 12px;
+    border-color: rgba(34, 211, 238, .26);
+    background: rgba(34, 211, 238, .07);
+  }
+
+  /* ---------- 玻璃输入台 ---------- */
+  .ask-card { padding-bottom: calc(20 * var(--u)); }
+  .ask-field { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+  .ask-field .ask-icon {
+    position: absolute; left: calc(15 * var(--u)); top: 50%; transform: translateY(-50%);
+    font-size: calc(18 * var(--u)); line-height: 1;
+    color: rgba(34, 211, 238, .7); pointer-events: none;
+  }
+  .ask-field textarea {
+    width: 100%;
+    min-height: calc(86 * var(--u));
+    padding: calc(15 * var(--u)) calc(16 * var(--u)) calc(15 * var(--u)) calc(44 * var(--u));
+    border-radius: calc(18 * var(--u));
+    background: rgba(3, 8, 16, .55);
+    border: 1px solid var(--line-soft);
+    font-size: 15px; line-height: 1.6;
+  }
+  .ask-field textarea:focus {
+    background: rgba(3, 8, 16, .74);
+    border-color: rgba(34, 211, 238, .55);
+    box-shadow: 0 0 0 4px rgba(34, 211, 238, .10), inset 0 0 34px rgba(34, 211, 238, .07);
+  }
+  .ask-card .start-btn {
+    align-self: stretch; padding-inline: calc(24 * var(--u));
+    font-size: 15px; letter-spacing: .02em;
+  }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: calc(13 * var(--u)); }
+  .example {
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    padding: 6px 13px; border-radius: 999px;
+    color: #9fb2cc; background: rgba(148, 163, 184, .05);
+    border: 1px solid var(--line-soft);
+    transition: color .16s ease, border-color .16s ease, background .16s ease, transform .16s ease;
+  }
+  .example:hover {
+    color: #ecfeff; border-color: rgba(34, 211, 238, .42);
+    background: rgba(34, 211, 238, .09); transform: translateY(-1px);
+  }
+  .example:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; }
+  .ask-hint { margin-left: auto; font-size: 12px; white-space: nowrap; }
+  .card-head > .card-title:last-child { margin-left: 0; }
+  .ask-field .ask-icon svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); display: block; }
+
+  /* ---------- 卡片：图标碟 + 标题层级 + 悬停描边 ---------- */
+  .card {
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+    transition: border-color .2s ease, box-shadow .2s ease;
+  }
+  .card:hover { border-color: rgba(34, 211, 238, .20); }
+  .card-head {
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: calc(10 * var(--u));
+  }
+  .card-head > :last-child { margin-left: auto; }
+  .card-ico {
+    flex: none; display: grid; place-items: center;
+    width: calc(30 * var(--u)); height: calc(30 * var(--u));
+    border-radius: calc(10 * var(--u));
+    font-size: calc(14 * var(--u)); line-height: 1;
+    background: linear-gradient(150deg, rgba(34, 211, 238, .20), rgba(139, 92, 246, .18));
+    border: 1px solid rgba(34, 211, 238, .22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+  }
+  .card-ico.warn {
+    background: linear-gradient(150deg, rgba(251, 113, 133, .20), rgba(251, 146, 60, .16));
+    border-color: rgba(251, 113, 133, .28);
+  }
+  .card-ico.ok {
+    background: linear-gradient(150deg, rgba(52, 211, 153, .20), rgba(34, 211, 238, .16));
+    border-color: rgba(52, 211, 153, .28);
+  }
+  .card-title {
+    font-size: 17px; font-weight: 700; letter-spacing: -.01em;
+    color: var(--ink); cursor: pointer;
+  }
+  .card-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+
+  /* ---------- 进度：大号渐变百分比 + 更厚的分段 ---------- */
+  .stage-percent {
+    font-size: calc(34 * var(--u)); font-weight: 800; letter-spacing: -.035em;
+    background: linear-gradient(180deg, #eaf9ff, #67e8f9 70%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #progress-card.interrupted .stage-percent {
+    background: none; color: #fb7185; -webkit-text-fill-color: currentColor;
+  }
+  .seg-cell { height: 12px; }
+  .seg-bar { gap: calc(6 * var(--u)); }
+  .seg-cell.done { box-shadow: 0 0 14px rgba(34, 211, 238, .30); }
+  .stage-emoji { font-size: calc(30 * var(--u)); }
+
+  /* ---------- 报告正文：更松的行距与标题层级 ---------- */
+  .draft { line-height: 1.85; }
+  .draft h2 { font-size: 21px; margin: calc(20 * var(--u)) 0 calc(10 * var(--u)); }
+  .draft h2:first-child { margin-top: 0; }
+  .draft h3 { margin-top: calc(16 * var(--u)); }
+  .draft ul, .draft ol { padding-left: 1.4em; }
+  .draft li { margin: 6px 0; }
+  .meta div { border-radius: calc(13 * var(--u)); }
+
+  /* ---------- 弹层 ---------- */
+  .modal {
+    background: linear-gradient(170deg, rgba(17, 27, 48, .96), rgba(7, 12, 23, .97));
+    box-shadow: 0 40px 90px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .05);
+  }
+  .modal-backdrop { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+  /* ---------- 手机 ---------- */
+  @media (max-width: 767px) {
+    .hero h2 { font-size: clamp(24px, 7.4vw, 32px); }
+    .hero .eyebrow { font-size: 9.5px; letter-spacing: .14em; }
+    .ask-hint { display: none; }
+    .ask-field textarea { min-height: 74px; }
+    .ask-card .start-btn { width: 100%; }
+    .card-head { flex-wrap: wrap; }
+    .card-ico { width: 28px; height: 28px; font-size: 13px; }
+    .stage-percent { font-size: 28px; }
+  }
 </style>
 </head>
 <body>
@@ -770,10 +992,12 @@
     <div class="top-actions">
       <span class="pill mode-pill" id="mode-pill">模式检测中</span>
       <span class="pill" id="thread-pill" hidden></span>
-      <button class="btn ghost settings-btn" id="history-btn" type="button">历史会话</button>
-      <button class="btn ghost settings-btn" id="settings-btn" type="button">
-        <span class="gear" aria-hidden="true">⚙</span> 模型设置
-      </button>
+      <nav class="nav-pill" aria-label="页面导航">
+        <button class="btn ghost settings-btn" id="history-btn" type="button">历史会话</button>
+        <button class="btn ghost settings-btn" id="settings-btn" type="button">
+          <span class="gear" aria-hidden="true">⚙</span> 模型设置
+        </button>
+      </nav>
     </div>
   </div>
 </header>
@@ -784,9 +1008,9 @@
     <h2>把一个问题，变成一份<br><span>带来源、可复核</span>的研究报告</h2>
     <p class="hero-copy">先拆解、再检索、再抓取；证据不足会补检，结论必须能回到原文。邮件与 Notion 只在你逐项确认后写入。</p>
     <div class="hero-stats">
-      <span><strong>3</strong> 次人工确认</span>
-      <span><strong>5</strong> 个固定工具</span>
-      <span><strong>0</strong> 编造来源</span>
+      <span><i aria-hidden="true">🧑‍⚖️</i><strong>3</strong> 次人工确认</span>
+      <span><i aria-hidden="true">🧰</i><strong>5</strong> 个固定工具</span>
+      <span><i aria-hidden="true">🛡️</i><strong>0</strong> 编造来源</span>
       <span class="hero-status" id="hero-status">等待配置</span>
     </div>
   </section>
@@ -796,17 +1020,30 @@
     运行 <code>python web.py</code> 后访问 <code>http://127.0.0.1:8000</code> 可跑真实研究流程，并在右上角「模型设置」里填写 API Key。
   </div>
 
-  <section class="card">
-    <label class="label" for="question">研究问题</label>
+  <section class="card ask-card">
+    <div class="card-head">
+      <span class="card-ico" aria-hidden="true">🔍</span>
+      <label class="card-title" for="question">研究问题</label>
+      <span class="muted ask-hint">一句话说清你想搞明白的事</span>
+    </div>
     <div class="ask-row">
-      <textarea id="question" rows="2" placeholder="例如：LangGraph 如何实现人工中断（human-in-the-loop）？"></textarea>
-      <button id="start-btn" class="btn primary">开始研究</button>
+      <div class="ask-field">
+        <span class="ask-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg></span>
+        <textarea id="question" rows="2" placeholder="例如：LangGraph 如何实现人工中断（human-in-the-loop）？"></textarea>
+      </div>
+      <button id="start-btn" class="btn primary start-btn">开始研究</button>
+    </div>
+    <div class="examples" id="examples">
+      <button type="button" class="example" data-q="LangGraph 如何实现人工中断（human-in-the-loop）？">LangGraph 人工中断怎么实现</button>
+      <button type="button" class="example" data-q="对比 LangGraph 与 AutoGen 在 human-in-the-loop 上的设计差异">LangGraph vs AutoGen 人工介入</button>
+      <button type="button" class="example" data-q="2025 年 AI Agent 在企业落地的主要挑战是什么？">2025 AI Agent 落地挑战</button>
     </div>
     <p class="hint">写操作（发邮件 / 存 Notion）只有在你逐项确认后才会执行；未配置凭据时写入 outbox/（dry-run）。</p>
   </section>
 
   <section class="card" id="history-card" hidden>
     <div class="card-head">
+      <span class="card-ico" aria-hidden="true">🗂️</span>
       <h2>历史会话</h2>
       <div>
         <button class="btn ghost" id="history-refresh" type="button">刷新</button>
@@ -821,6 +1058,7 @@
 
   <section class="card" id="progress-card" hidden>
     <div class="card-head progress-head">
+      <span class="card-ico" aria-hidden="true">🧭</span>
       <h2>执行进度</h2>
       <span class="muted" id="progress-text">处理中…</span>
       <button type="button" class="collapse-btn" id="progress-toggle" aria-expanded="true" aria-controls="progress-log">
@@ -906,6 +1144,7 @@
 
   <section class="card" id="unfinished-card" hidden>
     <div class="card-head">
+      <span class="card-ico warn" aria-hidden="true">⏸️</span>
       <h2>会话未完成</h2>
       <span class="pill danger" id="unfinished-status">已中断</span>
     </div>
@@ -921,6 +1160,7 @@
 
   <section class="card" id="final-card" hidden>
     <div class="card-head">
+      <span class="card-ico ok" aria-hidden="true">✅</span>
       <h2>最终结果</h2>
       <span class="pill" id="final-status"></span>
     </div>
@@ -949,6 +1189,7 @@
 
   <section class="card" id="trace-card" hidden>
     <div class="card-head">
+      <span class="card-ico" aria-hidden="true">📈</span>
       <h2>调用链 Trace</h2>
       <span class="muted" id="trace-meta"></span>
     </div>
@@ -2430,6 +2671,18 @@
   buildSegments();
   resetProgress();
   $("progress-toggle").addEventListener("click", () => setProgressCollapsed(!progressCollapsed));
+
+  // 示例问题：点一下填进输入框并聚焦，省去手打
+  document.querySelectorAll(".example").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const q = chip.getAttribute("data-q") || chip.textContent.trim();
+      const box = $("question");
+      box.value = q;
+      box.focus();
+      box.setSelectionRange(q.length, q.length);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  });
 
   // 页面加载时显示 LLM 模式；file:// 或后端不可用时自动进入静态演示模式
   // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始；?collapse=1 执行进度默认收起（深链/截图用）
