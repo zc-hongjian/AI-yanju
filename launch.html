@@ -4,134 +4,266 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>研究助手 · 一键启用</title>
+  <script>
+    // 首屏入场：先同步打上 intro-pending，避免元素先闪现再动画；
+    // 3.8s failsafe 兜底，任何异常（脚本报错/动画没跑起来）都会让页面恢复可见。
+    (function () {
+      var root = document.documentElement;
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      root.classList.add("intro-pending");
+      window.__introFailsafe = setTimeout(function () {
+        root.classList.remove("intro-pending");
+      }, 3800);
+    })();
+  </script>
   <style>
     :root {
       --bg: #05070d;
-      --card: rgba(15, 23, 42, .74);
       --ink: #e6edf7;
       --muted: #8fa3bf;
       --line: rgba(148, 163, 184, .16);
+      --line-strong: rgba(148, 163, 184, .28);
       --accent: #22d3ee;
       --accent-2: #8b5cf6;
       --green: #34d399;
       --amber: #fbbf24;
       --red: #fb7185;
       --glow: 0 0 0 1px rgba(34, 211, 238, .22), 0 18px 50px rgba(0, 0, 0, .45);
+      /* 等比单位：参考稿宽 1778，宽度封顶 2200；装饰元素全部乘 --u 缩放 */
+      --u: calc(min(100vw, 2200px) / 1778);
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
-    html, body { min-height: 100%; }
+    html { background: var(--bg); }
     body {
       margin: 0;
+      min-height: 100vh;
       color: var(--ink);
       font: 15px/1.65 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-      background:
-        radial-gradient(900px 520px at 12% -10%, rgba(34, 211, 238, .16), transparent 62%),
-        radial-gradient(820px 520px at 92% 4%, rgba(139, 92, 246, .16), transparent 60%),
-        radial-gradient(700px 500px at 50% 110%, rgba(14, 165, 233, .08), transparent 60%),
-        var(--bg);
+      -webkit-font-smoothing: antialiased;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 40px 20px 60px;
+      padding: calc(48 * var(--u)) calc(20 * var(--u)) calc(64 * var(--u));
     }
+
+    /* ---------- 背景：中央辉光 + 顶部阶梯光条 + 顶边光溢（纯 CSS，静态） ---------- */
+    .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+    .bg .glow {
+      position: absolute; left: 50%; top: calc(92 * var(--u));
+      width: calc(740 * var(--u)); height: calc(950 * var(--u));
+      transform: translateX(-50%);
+      background: radial-gradient(closest-side, rgba(34, 211, 238, .17), rgba(34, 211, 238, .06) 56%, transparent 74%);
+    }
+    .bg .glow-2 {
+      position: absolute; top: calc(-90px * var(--u)); right: calc(-60px * var(--u));
+      width: calc(620 * var(--u)); height: calc(520 * var(--u));
+      background: radial-gradient(closest-side, rgba(139, 92, 246, .16), transparent 70%);
+    }
+    .bars { position: absolute; top: 0; left: 0; right: 0; height: calc(655 * var(--u)); }
+    .bars span {
+      position: absolute; top: 0;
+      width: calc(var(--w) * var(--u));
+      height: calc(var(--h) * var(--u));
+      border-radius: 0 0 calc(24 * var(--u)) calc(24 * var(--u));
+      background: linear-gradient(180deg, rgba(34, 211, 238, .17), rgba(34, 211, 238, .05) 58%, rgba(34, 211, 238, 0));
+      filter: blur(calc(9 * var(--u)));
+    }
+    .bars .l { left: calc(var(--l) * var(--u)); }
+    .bars .r { right: calc(var(--l) * var(--u)); }
+    .spill {
+      position: absolute; top: 0; left: 0; right: 0; height: calc(150 * var(--u));
+      background: linear-gradient(180deg, rgba(34, 211, 238, .11), rgba(34, 211, 238, 0));
+    }
+
     .wrap { width: min(760px, 100%); }
-    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 34px; }
+
+    /* ---------- 品牌：毛玻璃胶囊 ---------- */
+    .brand {
+      display: inline-flex; align-items: center; gap: calc(12 * var(--u));
+      margin-bottom: calc(30 * var(--u));
+      padding: calc(8 * var(--u)) calc(18 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u));
+      border-radius: 999px;
+      background: rgba(148, 163, 184, .05);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
     .logo {
-      width: 46px; height: 46px; border-radius: 14px; flex: none;
+      width: calc(42 * var(--u)); height: calc(42 * var(--u));
+      border-radius: calc(13 * var(--u)); flex: none;
       display: grid; place-items: center;
-      font-weight: 800; font-size: 20px; color: #041019;
+      font-weight: 800; font-size: calc(19 * var(--u)); color: #041019;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       box-shadow: 0 10px 30px rgba(34, 211, 238, .28);
     }
-    .brand strong { display: block; font-size: 17px; letter-spacing: .2px; }
-    .brand span { color: var(--muted); font-size: 12.5px; }
+    .brand strong { display: block; font-size: 16.5px; letter-spacing: .2px; }
+    .brand span { color: var(--muted); font-size: 12px; }
 
+    /* ---------- 主卡片：毛玻璃 ---------- */
     .hero {
-      background: linear-gradient(160deg, rgba(15, 23, 42, .82), rgba(10, 17, 32, .9));
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 34px 32px 28px;
-      box-shadow: var(--glow);
       position: relative;
+      background: linear-gradient(160deg, rgba(17, 27, 48, .86), rgba(6, 11, 22, .88));
+      border: 1px solid var(--line);
+      border-radius: calc(24 * var(--u));
+      padding: calc(36 * var(--u)) calc(34 * var(--u)) calc(30 * var(--u));
+      box-shadow: var(--glow);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       overflow: hidden;
     }
-    .hero::after {
-      content: "";
-      position: absolute; inset: -40% -10% auto auto;
-      width: 380px; height: 380px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(139, 92, 246, .18), transparent 65%);
-      pointer-events: none;
+    .hero::before {
+      content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(34, 211, 238, .55), rgba(139, 92, 246, .4), transparent);
+      opacity: .8;
     }
     .eyebrow {
-      margin: 0 0 10px; color: var(--accent);
-      font-size: 11.5px; letter-spacing: .18em; font-weight: 700;
+      margin: 0 0 calc(12 * var(--u));
+      color: var(--accent);
+      font-size: 11px; letter-spacing: .2em; font-weight: 700;
+      text-transform: uppercase;
     }
     h1 {
-      margin: 0 0 14px; font-size: clamp(26px, 4.2vw, 38px); line-height: 1.22;
-      background: linear-gradient(100deg, #eaf6ff 10%, #67e8f9 45%, #a78bfa 90%);
+      margin: 0 0 calc(14 * var(--u));
+      font-size: clamp(28px, calc(46 * var(--u)), 46px);
+      line-height: 1.16;
+      letter-spacing: -.025em;
+      font-weight: 800;
+      background: linear-gradient(100deg, #f4faff 6%, #7dd3fc 52%, #a78bfa 94%);
       -webkit-background-clip: text; background-clip: text; color: transparent;
     }
-    .sub { margin: 0 0 24px; color: var(--muted); max-width: 56ch; }
+    .sub { margin: 0 0 calc(24 * var(--u)); color: var(--muted); max-width: 56ch; }
 
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+    /* ---------- 按钮：主按钮渐变 + 次按钮玻璃，hover 抬 1px ---------- */
+    .actions { display: flex; flex-wrap: wrap; gap: calc(10 * var(--u)); margin-bottom: calc(20 * var(--u)); }
     .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      border-radius: 12px; padding: 12px 18px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      border-radius: calc(13 * var(--u));
+      padding: calc(12 * var(--u)) calc(19 * var(--u));
       font-size: 14.5px; font-weight: 600; text-decoration: none;
       cursor: pointer; border: 1px solid transparent;
-      transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+      transition: transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease;
     }
     .btn.primary {
       color: #031018; border: none;
       background: linear-gradient(100deg, #22d3ee, #8b5cf6);
       box-shadow: 0 12px 34px rgba(34, 211, 238, .3);
     }
-    .btn.primary:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(34, 211, 238, .4); }
+    .btn.primary:hover { transform: translateY(-1px); box-shadow: 0 16px 42px rgba(34, 211, 238, .42), 0 0 24px rgba(34, 211, 238, .22); }
     .btn.ghost {
-      color: #c3d2e5; background: rgba(148, 163, 184, .07);
+      color: #c3d2e5; background: rgba(148, 163, 184, .06);
       border-color: var(--line);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
     }
-    .btn.ghost:hover { color: #ecfeff; border-color: rgba(34, 211, 238, .45); background: rgba(34, 211, 238, .1); }
+    .btn.ghost:hover { transform: translateY(-1px); color: #ecfeff; border-color: rgba(34, 211, 238, .45); background: rgba(34, 211, 238, .1); }
+    .btn:active { transform: translateY(0); }
     .btn:focus-visible { outline: 2px solid rgba(34, 211, 238, .65); outline-offset: 2px; }
 
+    /* ---------- 后端状态 ---------- */
     .status {
       display: flex; align-items: center; gap: 9px;
       font-size: 13px; color: var(--muted);
-      border: 1px dashed var(--line); border-radius: 11px;
-      padding: 10px 13px; margin-bottom: 20px;
+      border: 1px solid var(--line); border-radius: calc(13 * var(--u));
+      background: rgba(148, 163, 184, .04);
+      padding: calc(11 * var(--u)) calc(14 * var(--u));
+      margin-bottom: calc(20 * var(--u));
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
     .dot.ok { background: var(--green); box-shadow: 0 0 10px rgba(52, 211, 153, .7); }
-    .dot.bad { background: var(--red); }
+    .dot.bad { background: var(--red); box-shadow: 0 0 10px rgba(251, 113, 133, .6); }
     .status code { color: #c3d2e5; background: rgba(148, 163, 184, .1); padding: 1px 6px; border-radius: 6px; }
 
-    .steps { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 8px; }
-    .steps li { display: flex; gap: 10px; color: #a9bdd6; font-size: 13.5px; }
-    .steps b { color: var(--accent); font-weight: 700; min-width: 18px; }
+    /* ---------- 四步说明：胶囊行，按阅读顺序依次显影 ---------- */
+    .steps { list-style: none; margin: 0 0 calc(6 * var(--u)); padding: 0; display: grid; gap: calc(9 * var(--u)); }
+    .steps li {
+      display: flex; gap: calc(12 * var(--u)); align-items: center;
+      color: #a9bdd6; font-size: 13.5px;
+      border: 1px solid var(--line); border-radius: 999px;
+      background: rgba(148, 163, 184, .045);
+      padding: calc(10 * var(--u)) calc(16 * var(--u));
+      transition: border-color .18s ease, background .18s ease, transform .18s ease;
+    }
+    .steps li:hover { border-color: rgba(34, 211, 238, .3); background: rgba(34, 211, 238, .05); transform: translateY(-1px); }
+    .steps b {
+      flex: none; display: grid; place-items: center;
+      width: calc(22 * var(--u)); height: calc(22 * var(--u));
+      border-radius: 50%; font-size: 11.5px; font-weight: 700;
+      color: var(--accent); background: rgba(34, 211, 238, .12);
+      border: 1px solid rgba(34, 211, 238, .22);
+    }
 
-    details.help { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
-    details.help summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-    details.help summary:hover { color: var(--accent); }
-    details.help pre {
-      margin: 10px 0 0; padding: 12px 14px; border-radius: 10px;
+    /* ---------- 折叠帮助：grid-template-rows 0fr -> 1fr 平滑展开 ---------- */
+    .help { margin-top: calc(18 * var(--u)); border-top: 1px solid var(--line); padding-top: calc(14 * var(--u)); }
+    .help-toggle {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      background: none; border: 0; padding: 0; cursor: pointer;
+      color: var(--muted); font: inherit; font-size: 13px; text-align: left;
+      transition: color .18s ease;
+    }
+    .help-toggle:hover { color: var(--accent); }
+    .help-toggle:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 3px; border-radius: 6px; }
+    .help-toggle .chev { margin-left: auto; display: inline-block; transition: transform .25s ease; }
+    .help.open .help-toggle .chev { transform: rotate(180deg); }
+    .help-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s cubic-bezier(.22, .61, .36, 1); }
+    .help.open .help-panel { grid-template-rows: 1fr; }
+    .help-inner { overflow: hidden; min-height: 0; }
+    .help-inner pre {
+      margin: calc(12 * var(--u)) 0 0; padding: calc(14 * var(--u));
+      border-radius: calc(12 * var(--u));
       background: rgba(2, 6, 14, .72); border: 1px solid var(--line);
       color: #c8d5e8; font-size: 12.5px; overflow: auto;
+      font-family: "Cascadia Mono", Consolas, monospace;
     }
-    footer { margin-top: 22px; text-align: center; color: var(--muted); font-size: 12px; }
-    @media (max-width: 560px) {
-      .hero { padding: 26px 20px; }
-      .actions { flex-direction: column; }
-      .btn { justify-content: center; }
+
+    footer { margin-top: calc(26 * var(--u)); text-align: center; color: var(--muted); font-size: 12px; }
+
+    /* ---------- 入场：intro-pending 期间先隐形，WAAPI 逐级落定 ---------- */
+    .intro-pending .anim { opacity: 0; }
+
+    /* ---------- 响应式：平板固定 --u = .82px，手机固定 --u = .8px ---------- */
+    @media (max-width: 1199px) {
+      :root { --u: .82px; }
+    }
+    @media (max-width: 767px) {
+      :root { --u: .8px; }
+      body { padding: 28px 16px 44px; }
+      .brand { margin-bottom: 22px; }
+      .hero { padding: 26px 20px 22px; border-radius: 20px; }
+      .actions { flex-direction: column; align-items: stretch; }
+      .btn { width: 100%; }
+      .steps li { border-radius: 16px; align-items: flex-start; }
+      .bars span[data-n="4"], .bars span[data-n="5"] { display: none; }
+      .status { align-items: flex-start; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .btn, .dot { transition: none; }
+      .btn, .dot, .steps li, .help-panel, .help-toggle .chev { transition: none; }
+      .intro-pending .anim { opacity: 1; }
     }
   </style>
 </head>
 <body>
+
+  <div class="bg" aria-hidden="true">
+    <div class="glow"></div>
+    <div class="glow-2"></div>
+    <div class="bars">
+      <span class="l" data-n="1" style="--l:0;--w:98;--h:430"></span>
+      <span class="l" data-n="2" style="--l:104;--w:94;--h:360"></span>
+      <span class="l" data-n="3" style="--l:208;--w:90;--h:288"></span>
+      <span class="l" data-n="4" style="--l:312;--w:86;--h:216"></span>
+      <span class="l" data-n="5" style="--l:416;--w:82;--h:156"></span>
+      <span class="r" data-n="1" style="--l:0;--w:98;--h:430"></span>
+      <span class="r" data-n="2" style="--l:104;--w:94;--h:360"></span>
+      <span class="r" data-n="3" style="--l:208;--w:90;--h:288"></span>
+      <span class="r" data-n="4" style="--l:312;--w:86;--h:216"></span>
+      <span class="r" data-n="5" style="--l:416;--w:82;--h:156"></span>
+    </div>
+    <div class="spill"></div>
+  </div>
+
   <main class="wrap">
-    <div class="brand">
+    <div class="brand anim">
       <div class="logo">研</div>
       <div>
         <strong>LangGraph 研究助手</strong>
@@ -140,42 +272,49 @@
     </div>
 
     <section class="hero">
-      <p class="eyebrow">RESEARCH AGENT · ONE-CLICK</p>
-      <h1>一键启用<br />从问题到带引用的研究报告</h1>
-      <p class="sub">
+      <p class="eyebrow anim">RESEARCH AGENT · ONE-CLICK</p>
+      <h1 class="anim">一键启用<br />从问题到带引用的研究报告</h1>
+      <p class="sub anim">
         点「一键启用」进入主界面，先填模型 Key（也可以跳过，直接用离线模式）。
         页面右上角的「模型设置」随时可以改，Key 只保存在后端进程内存里。
       </p>
 
-      <div class="actions">
+      <div class="actions anim">
         <button class="btn primary" id="launch-btn" type="button">🚀 一键启用（先填模型 Key）</button>
         <a class="btn ghost" id="skip-link" href="./index.html">跳过设置，直接进入</a>
-        <a class="btn ghost" id="demo-link" href="./index.html?autostart=1&q=LangGraph%20%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E4%BA%BA%E5%B7%A5%E4%B8%AD%E6%96%AD%EF%BC%9F">看静态演示</a>
+        <a class="btn ghost" id="demo-link" href="./index.html?autostart=1&amp;q=LangGraph%20%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E4%BA%BA%E5%B7%A5%E4%B8%AD%E6%96%AD%EF%BC%9F">看静态演示</a>
         <a class="btn ghost" id="history-link" href="./index.html?history=1">历史会话</a>
       </div>
 
-      <div class="status" id="status">
+      <div class="status anim" id="status">
         <span class="dot" id="status-dot"></span>
         <span id="status-text">正在检查后端…</span>
       </div>
 
       <ol class="steps">
-        <li><b>1</b><span>填模型 Key（智谱 / DeepSeek / OpenAI 兼容接口都行）</span></li>
-        <li><b>2</b><span>输入研究问题，14 个节点自动跑：搜索 → 抓取 → 证据 → 大纲 → 报告</span></li>
-        <li><b>3</b><span>草稿、发邮件、存 Notion 三处人工确认，写操作未经同意不会执行</span></li>
-        <li><b>4</b><span>结果页可下载 Markdown、查看调用链 Trace 与成本</span></li>
+        <li class="anim"><b>1</b><span>填模型 Key（智谱 / DeepSeek / OpenAI 兼容接口都行）</span></li>
+        <li class="anim"><b>2</b><span>输入研究问题，14 个节点自动跑：搜索 → 抓取 → 证据 → 大纲 → 报告</span></li>
+        <li class="anim"><b>3</b><span>草稿、发邮件、存 Notion 三处人工确认，写操作未经同意不会执行</span></li>
+        <li class="anim"><b>4</b><span>结果页可下载 Markdown、查看调用链 Trace 与成本</span></li>
       </ol>
 
-      <details class="help">
-        <summary>后端没启动？点这里看怎么启动</summary>
-        <pre>双击根目录的 start.bat（自动开浏览器）
+      <div class="help anim" id="help">
+        <button class="help-toggle" id="help-toggle" type="button" aria-expanded="false" aria-controls="help-panel">
+          <span>后端没启动？点这里看怎么启动</span>
+          <span class="chev" aria-hidden="true">▾</span>
+        </button>
+        <div class="help-panel" id="help-panel">
+          <div class="help-inner">
+<pre>双击根目录的 start.bat（自动开浏览器）
 或命令行：.venv\Scripts\python.exe web.py
 然后访问：http://127.0.0.1:8000/launch
 端口可用环境变量 AGENT_WEB_PORT 修改。</pre>
-      </details>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <footer>同一张 LangGraph 图 · CLI 与网页共用 · 写操作强制人工确认</footer>
+    <footer class="anim">同一张 LangGraph 图 · CLI 与网页共用 · 写操作强制人工确认</footer>
   </main>
 
   <script>
@@ -189,6 +328,7 @@
       var dot = document.getElementById("status-dot");
       var statusText = document.getElementById("status-text");
       var DEMO_URL = "./index.html?q=" + encodeURIComponent("LangGraph 如何实现人工中断？") + "&autostart=1";
+      var root = document.documentElement;
 
       function setStatus(kind, text) {
         dot.className = "dot" + (kind === "ok" ? " ok" : kind === "bad" ? " bad" : "");
@@ -210,6 +350,100 @@
         if (event.key === "Enter") start();
       });
 
+      /* ---------- 折叠帮助：0fr -> 1fr ---------- */
+      var help = document.getElementById("help");
+      var helpToggle = document.getElementById("help-toggle");
+      helpToggle.addEventListener("click", function () {
+        var open = help.classList.toggle("open");
+        helpToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+
+      /* ---------- 首屏入场序列 ---------- */
+      function revealAll() {
+        root.classList.remove("intro-pending");
+      }
+
+      function runIntro() {
+        if (!window.Element || !Element.prototype.animate) {
+          revealAll();
+          return;
+        }
+        var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (reduce) {
+          revealAll();
+          return;
+        }
+        // 与 CSS 里的 --u 保持同一档位：桌面按参考稿宽等比，平板/手机固定
+        function unitPx() {
+          var w = window.innerWidth;
+          if (w <= 767) return 0.8;
+          if (w <= 1199) return 0.82;
+          return Math.min(w, 2200) / 1778;
+        }
+        var u = unitPx();
+        var stepItems = document.querySelectorAll(".steps li");
+        // [元素, 开始时间(ms), 时长(ms)]
+        var plan = [
+          [document.querySelector(".brand"), 0, 620],
+          [document.querySelector(".eyebrow"), 120, 560],
+          [document.querySelector("h1"), 240, 620],
+          [document.querySelector(".sub"), 360, 560],
+          [document.querySelector(".actions"), 480, 560]
+        ];
+        var i;
+        for (i = 0; i < stepItems.length; i++) {
+          plan.push([stepItems[i], 560 + i * 85, 520]);
+        }
+        plan.push([document.querySelector(".status"), 700, 520]);
+        plan.push([document.querySelector(".help"), 780, 520]);
+        plan.push([document.querySelector("footer"), 860, 520]);
+
+        var anims = [];
+        for (i = 0; i < plan.length; i++) {
+          var el = plan[i][0];
+          if (!el) continue;
+          anims.push(el.animate(
+            [
+              { opacity: 0, transform: "translateY(" + (18 * u) + "px)" },
+              { opacity: 1, transform: "translateY(0)" }
+            ],
+            { duration: plan[i][2], delay: plan[i][1], easing: "cubic-bezier(.22,.61,.36,1)", fill: "both" }
+          ));
+        }
+        var done = false;
+        function finish() {
+          if (done) return;
+          done = true;
+          revealAll();
+          if (window.__introFailsafe) clearTimeout(window.__introFailsafe);
+          for (var k = 0; k < anims.length; k++) anims[k].cancel();
+        }
+        if (anims.length && anims[anims.length - 1].finished) {
+          anims[anims.length - 1].finished.then(finish, finish);
+        } else {
+          finish();
+        }
+        // 双保险：动画结束事件不可靠时，1.9s 后强制收尾
+        setTimeout(finish, 1900);
+      }
+
+      function whenReady(cb) {
+        // 字体就绪优先，最多等 500ms
+        var fired = false;
+        function once() { if (!fired) { fired = true; cb(); } }
+        setTimeout(once, 500);
+        if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
+          document.fonts.ready.then(once, once);
+        }
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", function () { whenReady(runIntro); });
+      } else {
+        whenReady(runIntro);
+      }
+
+      /* ---------- 后端探测 ---------- */
       if (isFile) {
         // 直接双击打开的本地文件：没有后端，一键启用改为静态演示
         setStatus("bad", "本地文件模式（file://）：没有后端，将打开<strong>静态演示</strong>（示例数据）");
