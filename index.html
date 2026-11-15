@@ -1078,6 +1078,220 @@
     body:not(.mode-workspace) .examples { justify-content: flex-start; }
     body:not(.mode-workspace) .ask-card .hint { text-align: left; }
   }
+
+  /* ============================================================
+     P4 报告阅读页：三栏（目录 / 正文 / 证据），只读
+     ============================================================ */
+  body.mode-report .landing-only,
+  body.mode-report .ask-card,
+  body.mode-report main > *:not(#report-shell) { display: none !important; }
+  body.mode-report .wrap { max-width: calc(1380 * var(--u)); }
+  body.mode-report main { padding: calc(14 * var(--u)) 0 calc(40 * var(--u)); gap: calc(14 * var(--u)); }
+  body.mode-report .top-actions { display: none; }
+
+  /* 顶部工具条 */
+  .report-bar {
+    display: flex; align-items: flex-start; gap: calc(18 * var(--u));
+    padding: calc(14 * var(--u)) calc(18 * var(--u));
+    border: 1px solid var(--line); border-radius: calc(18 * var(--u));
+    background: linear-gradient(150deg, rgba(17, 27, 48, .84), rgba(9, 15, 28, .78));
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .34);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  }
+  .report-back { flex: none; margin-top: calc(2 * var(--u)); }
+  .report-head { flex: 1 1 auto; min-width: 0; }
+  .report-head h1 { margin: 0 0 calc(8 * var(--u)); font-size: clamp(20px, calc(26 * var(--u)), 26px); letter-spacing: -.02em; line-height: 1.3; }
+  .report-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .report-chips span {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+    color: #9fb2cc; background: rgba(148, 163, 184, .07);
+    border: 1px solid var(--line-soft, rgba(148, 163, 184, .12));
+  }
+  .report-chips span.ok { color: var(--green); border-color: rgba(52, 211, 153, .3); background: rgba(52, 211, 153, .08); }
+  .report-chips span.bad { color: var(--red); border-color: rgba(251, 113, 133, .3); background: rgba(251, 113, 133, .08); }
+  .report-chips span.warn { color: var(--amber); border-color: rgba(251, 191, 36, .3); background: rgba(251, 191, 36, .08); }
+  .report-tools { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .font-picker { display: inline-flex; padding: 2px; border-radius: 999px; background: rgba(148, 163, 184, .07); border: 1px solid var(--line-soft, rgba(148, 163, 184, .12)); }
+  .font-picker button {
+    font: inherit; cursor: pointer; border: 0; background: transparent; color: #9fb2cc;
+    width: 26px; height: 26px; border-radius: 999px; font-weight: 700; line-height: 1;
+  }
+  .font-picker button:nth-child(1) { font-size: 11px; }
+  .font-picker button:nth-child(2) { font-size: 13px; }
+  .font-picker button:nth-child(3) { font-size: 15px; }
+  .font-picker button.active { color: #041019; background: linear-gradient(135deg, #22d3ee, #8b5cf6); }
+  .font-picker button:focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 1px; }
+
+  /* 三栏 */
+  .report-grid {
+    display: grid;
+    grid-template-columns: calc(200 * var(--u)) minmax(0, 1fr) calc(320 * var(--u));
+    gap: calc(24 * var(--u));
+    align-items: start;
+  }
+  .report-label { margin: 0 0 calc(10 * var(--u)); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #6f8098; font-weight: 700; }
+  .report-toc { position: sticky; top: calc(96 * var(--u)); }
+  #report-toc { display: grid; gap: 2px; }
+  #report-toc a {
+    display: block; padding: 6px 10px; border-radius: 8px;
+    color: #9fb2cc; font-size: 12.5px; line-height: 1.45; text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: color .15s ease, background .15s ease, border-color .15s ease;
+  }
+  #report-toc a:hover { color: #dbeafe; background: rgba(148, 163, 184, .07); }
+  #report-toc a.active { color: #7fe8f8; border-left-color: var(--accent); background: rgba(34, 211, 238, .08); }
+  .report-quality { margin-top: calc(18 * var(--u)); display: grid; gap: 8px; }
+  .report-quality .q {
+    font-size: 12px; line-height: 1.5; color: #9fb2cc;
+    padding: 8px 10px; border-radius: 10px;
+    background: rgba(148, 163, 184, .05); border: 1px solid var(--line-soft, rgba(148, 163, 184, .12));
+  }
+  .report-quality .q.warn { color: #fcd34d; border-color: rgba(251, 191, 36, .28); background: rgba(251, 191, 36, .07); }
+  .report-quality .q strong { color: var(--ink); }
+
+  /* 正文 */
+  .report-body {
+    font-size: var(--report-font, 15.5px);
+    line-height: 1.92;
+    color: #dbe6f5;
+    padding: calc(30 * var(--u)) calc(34 * var(--u));
+    border: 1px solid var(--line);
+    border-radius: calc(22 * var(--u));
+    background: linear-gradient(180deg, rgba(17, 27, 48, .66), rgba(8, 13, 24, .62));
+    box-shadow: 0 26px 64px rgba(0, 0, 0, .38);
+  }
+  .report-body > :first-child { margin-top: 0; }
+  .report-body h1 { font-size: 1.6em; margin: 1.4em 0 .6em; letter-spacing: -.02em; color: #f2f7ff; }
+  .report-body h2 {
+    font-size: 1.32em; margin: 1.7em 0 .7em; padding-bottom: .32em;
+    color: #f2f7ff; letter-spacing: -.02em;
+    border-bottom: 1px solid rgba(148, 163, 184, .14);
+  }
+  .report-body h3 { font-size: 1.1em; margin: 1.3em 0 .5em; color: #e6eefc; }
+  .report-body h4, .report-body h5 { font-size: 1em; margin: 1.1em 0 .4em; color: #cfdcf0; }
+  .report-body p { margin: .85em 0; }
+  .report-body ul, .report-body ol { margin: .8em 0; padding-left: 1.45em; }
+  .report-body li { margin: .38em 0; }
+  .report-body blockquote {
+    margin: 1.1em 0; padding: .5em .9em .5em 1em;
+    border-left: 3px solid rgba(34, 211, 238, .45);
+    background: rgba(34, 211, 238, .045); border-radius: 0 10px 10px 0; color: #a9bdd6;
+  }
+  .report-body a { color: #67e8f9; text-decoration: none; border-bottom: 1px solid rgba(103, 232, 249, .28); }
+  .report-body a:hover { border-bottom-color: rgba(103, 232, 249, .7); }
+  .report-body table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: .9em; }
+  .report-body th, .report-body td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  .report-body th { background: rgba(148, 163, 184, .08); }
+  .report-body code { background: rgba(148, 163, 184, .12); padding: 1px 5px; border-radius: 5px; font-size: .9em; }
+  .report-body pre { margin: 1em 0; padding: 12px 14px; border-radius: 12px; background: rgba(2, 6, 14, .72); border: 1px solid var(--line); overflow: auto; }
+
+  /* 引用角标：正文里的 [S#] 可点 */
+  .cite {
+    font: inherit; font-size: .82em; line-height: 1; cursor: pointer;
+    display: inline-flex; align-items: center; padding: 2px 6px; margin: 0 2px;
+    border-radius: 6px; vertical-align: baseline;
+    color: #7fe8f8; background: rgba(34, 211, 238, .1);
+    border: 1px solid rgba(34, 211, 238, .28);
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .cite:hover, .cite.is-active { color: #041019; background: #67e8f9; border-color: #67e8f9; }
+  .cite.flash { animation: cite-flash .9s ease; }
+  @keyframes cite-flash {
+    0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, .55); }
+    100% { box-shadow: 0 0 0 8px rgba(34, 211, 238, 0); }
+  }
+
+  /* 证据侧栏 */
+  .report-side { display: grid; gap: calc(10 * var(--u)); align-content: start; }
+  #report-evidence { display: grid; gap: 10px; }
+  .ev {
+    padding: 11px 13px; border-radius: 13px; cursor: pointer;
+    background: rgba(148, 163, 184, .045); border: 1px solid var(--line-soft, rgba(148, 163, 184, .12));
+    transition: border-color .16s ease, background .16s ease, transform .16s ease;
+  }
+  .ev:hover { border-color: rgba(34, 211, 238, .32); transform: translateY(-1px); }
+  .ev.is-active { border-color: rgba(34, 211, 238, .55); background: rgba(34, 211, 238, .09); }
+  .ev-top { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+  .ev-code { font: 700 11px/1 "Cascadia Mono", Consolas, monospace; color: #7fe8f8; background: rgba(34, 211, 238, .12); border: 1px solid rgba(34, 211, 238, .25); padding: 3px 6px; border-radius: 6px; }
+  .ev-conf { font-size: 11px; color: #7f93ae; margin-left: auto; }
+  .ev-claim { font-size: 12.8px; line-height: 1.55; color: #dbe6f5; }
+  .ev-quote { margin: 7px 0 0; padding-left: 8px; border-left: 2px solid rgba(148, 163, 184, .25); font-size: 11.8px; line-height: 1.55; color: #9fb2cc; }
+  .ev-src { margin-top: 7px; font-size: 11px; color: #6f8098; word-break: break-all; }
+  .ev-sub { margin: 6px 0 0; font-size: 11px; color: #6f8098; }
+  .ev-tag { font-size: 10.5px; padding: 2px 6px; border-radius: 6px; color: #fcd34d; background: rgba(251, 191, 36, .12); border: 1px solid rgba(251, 191, 36, .3); }
+  .ev-src a { color: #7fb3d9; text-decoration: none; }
+  .ev-src a:hover { text-decoration: underline; }
+
+  /* 空态与详情 */
+  .report-empty {
+    margin: 0; padding: calc(18 * var(--u)) calc(20 * var(--u));
+    border-radius: 14px; font-size: 14px;
+    color: #fcd34d; background: rgba(251, 191, 36, .07); border: 1px solid rgba(251, 191, 36, .26);
+  }
+  .report-details {
+    border: 1px solid var(--line); border-radius: calc(16 * var(--u));
+    background: rgba(148, 163, 184, .04); padding: calc(12 * var(--u)) calc(16 * var(--u));
+  }
+  .report-details > summary { cursor: pointer; color: #9fb2cc; font-size: 13px; }
+  .report-details > summary:hover { color: var(--accent); }
+  .report-details .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
+  .report-details .detail-grid div { background: rgba(2, 6, 14, .4); border: 1px solid var(--line-soft, rgba(148, 163, 184, .12)); border-radius: 10px; padding: 8px 10px; }
+  .report-details dt { font-size: 11px; color: #6f8098; }
+  .report-details dd { margin: 3px 0 0; font-size: 13px; color: var(--ink); font-family: "Cascadia Mono", Consolas, monospace; }
+  .report-details h3 { font-size: 13.5px; margin: 14px 0 6px; color: #cfdcf0; }
+
+  /* 窄屏：先收证据栏，再收目录 */
+  @media (max-width: 1240px) {
+    .report-grid { grid-template-columns: calc(180 * var(--u)) minmax(0, 1fr); }
+    .report-side { grid-column: 1 / -1; }
+    #report-evidence { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  }
+  @media (max-width: 900px) {
+    .report-bar { flex-wrap: wrap; row-gap: 10px; padding: 12px 14px; }
+    .report-back { order: 0; }
+    .report-head { order: 1; flex-basis: 100%; }
+    .report-tools { order: 2; width: 100%; justify-content: flex-start; gap: 6px; }
+    .report-tools .btn { flex: 1 1 auto; justify-content: center; }
+    .report-tools .font-picker { flex: none; }
+    .report-grid { display: block; }
+    .report-toc { position: static; margin-bottom: 14px; }
+    #report-toc { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .report-body { padding: 20px 18px; font-size: var(--report-font, 15px); }
+    .report-body table { display: block; overflow-x: auto; }
+  }
+
+  /* 打印 / 导出 PDF：白底单栏，保留来源编号 */
+  @media print {
+    @page { margin: 16mm 14mm; }
+    html, body { background: #fff !important; }
+    .bg, header.top, footer, .report-toc, .report-side,
+    .report-details, .report-empty, #settings-modal, .modal-backdrop, .toast { display: none !important; }
+    /* 打印时保留标题与关键指标，但去掉按钮 */
+    .report-bar {
+      display: block !important; padding: 0 0 12px; border: 0; border-radius: 0;
+      background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .report-bar .report-back, .report-bar .report-tools { display: none !important; }
+    .report-head h1 { font-size: 19pt; line-height: 1.25; color: #000; margin: 0 0 8px; }
+    .report-chips span { color: #333; background: none; border-color: #bbb; font-size: 9pt; }
+    body.mode-report .wrap { max-width: none; padding: 0; }
+    .report-grid { display: block; }
+    .report-body {
+      border: 0; border-radius: 0; box-shadow: none; padding: 0;
+      background: none; color: #111; font-size: 11.5pt; line-height: 1.7;
+    }
+    .report-body h1, .report-body h2, .report-body h3,
+    .report-body h4, .report-body h5 { color: #000; page-break-after: avoid; }
+    .report-body h2 { border-bottom-color: #ccc; }
+    .report-body a { color: #000; border-bottom: 0; }
+    .report-body blockquote { color: #333; background: none; border-left-color: #ccc; }
+    .cite, .cite.is-active, .cite.flash {
+      color: #333 !important; background: none !important; border: 0 !important;
+      box-shadow: none !important; animation: none !important; padding: 0; font-size: .85em;
+    }
+    .report-body pre, .report-body table { page-break-inside: avoid; }
+  }
 </style>
 </head>
 <body>
@@ -1325,6 +1539,7 @@
     </details>
     <div class="actions">
       <button class="btn primary" id="download-report">下载 Markdown 报告</button>
+      <button class="btn ghost" id="open-report" type="button" hidden>阅读报告页</button>
       <button class="btn ghost" id="restart-btn">开始新的研究</button>
     </div>
     <div class="draft" id="final-report"></div>
@@ -1347,6 +1562,47 @@
     </div>
     <p class="hint">每个节点的耗时 / token / 成本（来自 <code>logs/&lt;trace_id&gt;.trace.jsonl</code>，未知模型会标记「估算」）。</p>
     <div id="trace-body"></div>
+  </section>
+
+  <!-- 报告阅读页：/report/<thread_id> 时显示，只读视图 -->
+  <section id="report-shell" hidden>
+    <div class="report-bar">
+      <a class="btn ghost report-back" id="report-back" href="/index.html">← 返回工作区</a>
+      <div class="report-head">
+        <h1 id="report-title">研究报告</h1>
+        <div class="report-chips" id="report-chips"></div>
+      </div>
+      <div class="report-tools">
+        <div class="font-picker" id="font-picker" role="group" aria-label="正文字号">
+          <button type="button" data-size="s" title="小号字">A</button>
+          <button type="button" data-size="m" class="active" title="中号字">A</button>
+          <button type="button" data-size="l" title="大号字">A</button>
+        </div>
+        <button class="btn ghost" id="report-copy" type="button">复制链接</button>
+        <button class="btn ghost" id="report-print" type="button">打印 / PDF</button>
+        <button class="btn primary" id="report-download" type="button">下载 MD</button>
+      </div>
+    </div>
+
+    <p class="report-empty" id="report-empty" hidden></p>
+
+    <div class="report-grid" id="report-grid">
+      <aside class="report-toc" aria-label="报告目录">
+        <p class="report-label">目录</p>
+        <nav id="report-toc"></nav>
+        <div class="report-quality" id="report-quality"></div>
+      </aside>
+      <article class="report-body" id="report-body"></article>
+      <aside class="report-side" aria-label="证据与来源">
+        <p class="report-label">证据与来源<span id="report-evidence-count"></span></p>
+        <div id="report-evidence"></div>
+      </aside>
+    </div>
+
+    <details class="report-details" id="report-details" hidden>
+      <summary>执行详情（写操作 / 错误 / 成本 / 完整日志）</summary>
+      <div id="report-details-body"></div>
+    </details>
   </section>
 </main>
 
@@ -2131,6 +2387,7 @@
 
   function showFinal(final) {
     currentFinal = final;
+    if ($("open-report")) $("open-report").hidden = !threadId || demoMode;
     $("final-status").textContent = STATUS_TEXT[final.status] || final.status || "完成";
     const meta = [
       // 状态给中文标签，原始英文值放 title，避免 completed_with_action_failure 这类长串撑破网格
@@ -2206,6 +2463,7 @@
   // 首页（搜索式）与工作区（流水线）两种形态
   function setLayout(mode) {
     document.body.classList.toggle("mode-workspace", mode === "workspace");
+    document.body.classList.toggle("mode-report", mode === "report");
   }
 
   function resetAll() {
@@ -2798,6 +3056,10 @@
   });
   $("notion-skip").addEventListener("click", () => resume({ save: false }));
 
+  $("open-report").addEventListener("click", () => {
+    if (!threadId) return;
+    location.href = "/report/" + encodeURIComponent(threadId);
+  });
   $("download-report").addEventListener("click", () => {
     if (!currentFinal) return;
     const blob = new Blob([currentFinal.report || ""], { type: "text/markdown;charset=utf-8" });
@@ -2846,6 +3108,330 @@
     });
   });
 
+
+  // ================================================================
+  //  报告阅读页：/report/<thread_id>（只读）
+  // ================================================================
+  const reportMatch = location.pathname.match(/^\/report\/([^/]+)\/?$/);
+  const reportThreadId = reportMatch ? decodeURIComponent(reportMatch[1]) : "";
+  if (reportThreadId) setLayout("report");
+
+  const REPORT_FONT_KEY = "agent-report-font";
+  const REPORT_FONTS = { s: "14px", m: "15.5px", l: "17px" };
+  let tocObserver = null;
+
+  function readSavedFont() {
+    try {
+      const saved = localStorage.getItem(REPORT_FONT_KEY);
+      return REPORT_FONTS[saved] ? saved : "m";
+    } catch (err) {
+      return "m";
+    }
+  }
+
+  function applyReportFont(size) {
+    const px = REPORT_FONTS[size] || REPORT_FONTS.m;
+    const body = $("report-body");
+    if (body) body.style.setProperty("--report-font", px);
+    document.querySelectorAll("#font-picker button").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.size === size);
+    });
+    try { localStorage.setItem(REPORT_FONT_KEY, size); } catch (err) { /* 隐私模式忽略 */ }
+  }
+
+  function sourceCodeMap(final) {
+    const map = new Map();
+    (final.sources || []).forEach((src, index) => {
+      if (src && src.url) map.set(String(src.url), "S" + (index + 1));
+    });
+    return map;
+  }
+
+  function renderReportChips(final) {
+    const chips = [];
+    const status = final.status || "";
+    const cls = status === "completed" ? "ok" : (status.indexOf("completed") === 0 ? "warn" : "bad");
+    chips.push('<span class="' + cls + '">' + escapeHtml(STATUS_TEXT[status] || status || "完成") + "</span>");
+    chips.push("<span>来源 " + (final.sources || []).length + "</span>");
+    chips.push("<span>证据 " + (final.evidence_count || 0) + "</span>");
+    const cov = final.coverage_summary || {};
+    if (cov.total) {
+      const ok = (cov.covered || 0) >= cov.total;
+      chips.push("<span class='" + (ok ? "ok" : "warn") + "'>覆盖 " + (cov.covered || 0) + "/" + cov.total + "</span>");
+    }
+    const ver = final.verification || {};
+    if (ver.total) chips.push("<span>支持率 " + Math.round((ver.support_rate || 0) * 100) + "%</span>");
+    chips.push("<span>检索 " + (final.retrieval_rounds || 1) + " 轮</span>");
+    chips.push("<span>耗时 " + Math.round((final.duration_ms || 0) / 1000) + "s</span>");
+    chips.push("<span>成本 ¥" + (final.cost_cny == null ? 0 : final.cost_cny) + (final.cost_estimated ? "（估算）" : "") + "</span>");
+    if (final.finished_at) {
+      chips.push("<span>完成于 " + escapeHtml(String(final.finished_at).slice(0, 16).replace("T", " ")) + "</span>");
+    }
+    $("report-chips").innerHTML = chips.join("");
+  }
+
+  function makeCite(code) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cite";
+    btn.dataset.code = code;
+    btn.textContent = code;
+    btn.title = "查看 " + code + " 对应的证据";
+    return btn;
+  }
+
+  // 正文里的引用包成可点按钮：兼容 [S1](url) 链接式与裸 [S1] 两种写法
+  function wrapCitations(container) {
+    // 1) 链接式：[S1](https://...) 会被渲染成 <a>S1</a>
+    container.querySelectorAll("a").forEach((anchor) => {
+      const text = (anchor.textContent || "").trim();
+      if (!/^S\d+$/.test(text)) return;
+      anchor.replaceWith(makeCite(text));
+    });
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.nodeValue || node.nodeValue.indexOf("[S") < 0) continue;
+      if (node.parentElement && node.parentElement.closest("a, pre, code, button, .cite")) continue;
+      nodes.push(node);
+    }
+    nodes.forEach((node) => {
+      const text = node.nodeValue;
+      const re = /\[(S\d+)\]/g;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      let match;
+      while ((match = re.exec(text)) !== null) {
+        if (match.index > last) frag.appendChild(document.createTextNode(text.slice(last, match.index)));
+        frag.appendChild(makeCite(match[1]));
+        last = re.lastIndex;
+      }
+      if (!last) return;
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
+  function renderReportBody(final) {
+    const body = $("report-body");
+    body.innerHTML = renderMarkdown(final.report || "");
+    const headings = Array.from(body.querySelectorAll("h1, h2, h3")).filter((el) => el.textContent.trim());
+    const links = [];
+    headings.forEach((el, index) => {
+      const id = "sec-" + (index + 1);
+      el.id = id;
+      const level = el.tagName === "H3" ? 2 : 1;
+      links.push('<a href="#' + id + '" data-target="' + id + '"' + (level === 2 ? ' class="lvl2"' : "") + ">" +
+        escapeHtml(el.textContent.trim()) + "</a>");
+    });
+    $("report-toc").innerHTML = links.join("") || '<p class="q">这份报告没有分节标题</p>';
+    wrapCitations(body);
+  }
+
+  function renderEvidencePanel(final) {
+    const codeMap = sourceCodeMap(final);
+    const items = final.evidence || [];
+    $("report-evidence-count").textContent = items.length ? " · " + items.length + " 条" : "";
+    if (!items.length) {
+      $("report-evidence").innerHTML = '<p class="q">这次没有提取到可用证据</p>';
+      return;
+    }
+    $("report-evidence").innerHTML = items.map((ev, index) => {
+      const url = String(ev.source_url || "");
+      const code = codeMap.get(url) || "S?";
+      const confidence = typeof ev.confidence === "number" ? "置信 " + ev.confidence.toFixed(2) : "";
+      const rawQuote = String(ev.quote || "");
+      const claim = String(ev.claim || "");
+      // quote 与 claim 相同就不重复展示，避免每条卡都像复读
+      const showQuote = rawQuote && rawQuote !== claim;
+      const quote = rawQuote.length > 320 ? rawQuote.slice(0, 320) + "…" : rawQuote;
+      const sub = String(ev.sub_question || "").trim();
+      const promo = ev.promo ? '<span class="ev-tag">推广</span>' : "";
+      return '<article class="ev" data-code="' + escapeHtml(code) + '" data-idx="' + index + '">' +
+        '<div class="ev-top"><span class="ev-code">' + escapeHtml(code) + "</span>" + promo +
+        (confidence ? '<span class="ev-conf">' + escapeHtml(confidence) + "</span>" : "") + "</div>" +
+        '<p class="ev-claim">' + escapeHtml(claim) + "</p>" +
+        (showQuote ? '<p class="ev-quote">' + escapeHtml(quote) + "</p>" : "") +
+        (sub ? '<p class="ev-sub">对应子问题：' + escapeHtml(sub) + "</p>" : "") +
+        '<p class="ev-src">' + (url
+          ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(url) + "</a>"
+          : "来源缺失") + "</p>" +
+        "</article>";
+    }).join("");
+  }
+
+  function renderReportQuality(final) {
+    const parts = [];
+    const cov = final.coverage_summary || {};
+    const uncovered = cov.uncovered || [];
+    if (cov.total) {
+      const ok = (cov.covered || 0) >= cov.total;
+      parts.push('<div class="q' + (ok ? "" : " warn") + '">覆盖 <strong>' + (cov.covered || 0) + "/" + cov.total +
+        "</strong>" + (uncovered.length ? '<br>未覆盖：' + uncovered.map(escapeHtml).join("；") : "") + "</div>");
+    }
+    const review = final.draft_review || {};
+    const issueCount = Number(review.issue_count || 0);
+    if (review.status || issueCount) {
+      parts.push('<div class="q' + (issueCount ? " warn" : "") + '">引用校验 ' +
+        escapeHtml(review.status || "-") + (issueCount ? " · 剩余问题 " + issueCount + " 个" : " · 无问题") + "</div>");
+    }
+    const errors = final.errors || [];
+    if (errors.length) {
+      parts.push('<div class="q warn">工具/抓取告警 <strong>' + errors.length + "</strong> 条（见页尾执行详情）</div>");
+    }
+    if (!parts.length) parts.push('<div class="q">质量元数据：无</div>');
+    $("report-quality").innerHTML = parts.join("");
+  }
+
+  function renderReportDetails(final, data) {
+    const rows = [];
+    const push = (k, v) => rows.push("<div><dt>" + escapeHtml(k) + "</dt><dd>" + escapeHtml(String(v)) + "</dd></div>");
+    push("模型", final.model || "-");
+    push("trace_id", final.trace_id || "-");
+    push("检索轮次", final.retrieval_rounds || 1);
+    push("token", (final.token_usage || {}).total_tokens || 0);
+    push("成本", "¥" + (final.cost_cny == null ? 0 : final.cost_cny) + (final.cost_estimated ? "（估算）" : ""));
+    push("日志条数", (final.log_summary || {}).total || (data.logs || []).length);
+    let html = '<div class="detail-grid">' + rows.join("") + "</div>";
+    const actions = final.actions || [];
+    if (actions.length) {
+      html += "<h3>写操作</h3><table class=\"log-table\"><thead><tr><th>操作</th><th>结果</th><th>模式</th><th>详情</th></tr></thead><tbody>" +
+        actions.map((act) => "<tr><td>" + escapeHtml(act.action || act.name || "-") + "</td><td>" +
+          (act.ok ? "成功" : "失败") + "</td><td>" + escapeHtml(act.mode || "-") +
+          "</td><td class=\"mono\">" + escapeHtml(act.detail || act.message || act.error || "") + "</td></tr>").join("") +
+        "</tbody></table>";
+    }
+    const errors = final.errors || [];
+    if (errors.length) {
+      html += "<h3>错误与降级</h3><ul class=\"err-list\">" +
+        errors.map((item) => "<li>" + escapeHtml(typeof item === "string" ? item : JSON.stringify(item)) + "</li>").join("") +
+        "</ul>";
+    }
+    html += '<h3>完整日志</h3><div class="log-wrap"><table class="log-table"><thead><tr>' +
+      "<th>step_id</th><th>节点</th><th>状态</th><th>重试</th><th>耗时</th></tr></thead>" +
+      '<tbody id="report-log-body"></tbody></table></div>';
+    $("report-details-body").innerHTML = html;
+    $("report-details").hidden = false;
+    renderLogs("report-log-body", data.logs || []);
+  }
+
+  function bindReportInteractions() {
+    const body = $("report-body");
+    const side = $("report-evidence");
+    if (body.dataset.bound) return;
+    body.dataset.bound = "1";
+    body.addEventListener("click", (event) => {
+      const cite = event.target.closest(".cite");
+      if (!cite) return;
+      const code = cite.dataset.code;
+      const card = side.querySelector('.ev[data-code="' + code + '"]');
+      side.querySelectorAll(".ev").forEach((el) => el.classList.toggle("is-active", el === card));
+      body.querySelectorAll(".cite").forEach((el) => el.classList.toggle("is-active", el === cite));
+      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+      else showToast("没有找到 " + code + " 的证据卡");
+    });
+    side.addEventListener("click", (event) => {
+      if (event.target.closest("a")) return;
+      const card = event.target.closest(".ev");
+      if (!card) return;
+      const code = card.dataset.code;
+      side.querySelectorAll(".ev").forEach((el) => el.classList.toggle("is-active", el === card));
+      const targets = body.querySelectorAll('.cite[data-code="' + code + '"]');
+      body.querySelectorAll(".cite").forEach((el) => el.classList.toggle("is-active", el.dataset.code === code));
+      if (!targets.length) { showToast("正文里没有引用 " + code); return; }
+      targets[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      targets.forEach((el) => { el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); });
+    });
+  }
+
+  function bindTocSpy() {
+    const links = Array.from(document.querySelectorAll("#report-toc a"));
+    if (!links.length || !window.IntersectionObserver) return;
+    if (tocObserver) tocObserver.disconnect();
+    const byId = new Map();
+    links.forEach((link) => byId.set(link.dataset.target, link));
+    tocObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        links.forEach((link) => link.classList.remove("active"));
+        const link = byId.get(entry.target.id);
+        if (link) link.classList.add("active");
+      });
+    }, { rootMargin: "-96px 0px -68% 0px", threshold: 0 });
+    byId.forEach((_, id) => {
+      const target = document.getElementById(id);
+      if (target) tocObserver.observe(target);
+    });
+  }
+
+  function bindReportTools() {
+    $("report-print").addEventListener("click", () => window.print());
+    $("report-copy").addEventListener("click", () => {
+      const url = location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(
+          () => showToast("报告链接已复制"),
+          () => showToast("复制失败，请手动复制地址栏")
+        );
+      } else {
+        showToast("当前浏览器不支持自动复制");
+      }
+    });
+    $("report-download").addEventListener("click", () => {
+      if (!currentFinal) return;
+      const blob = new Blob([currentFinal.report || ""], { type: "text/markdown;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "research-" + (currentFinal.trace_id || "report") + ".md";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+    document.querySelectorAll("#font-picker button").forEach((btn) => {
+      btn.addEventListener("click", () => applyReportFont(btn.dataset.size));
+    });
+  }
+
+  async function loadReport(tid) {
+    $("report-shell").hidden = false;
+    $("report-back").setAttribute("href", "/index.html?session=" + encodeURIComponent(tid));
+    try {
+      const data = await fetchJson("/api/sessions/" + encodeURIComponent(tid));
+      const final = data.final_output;
+      const question = (final && final.research_question) || data.question || "研究报告";
+      $("report-title").textContent = question;
+      document.title = "报告：" + question;
+      if (!final || !final.report) {
+        $("report-grid").hidden = true;
+        $("report-empty").hidden = false;
+        const status = data.status || "";
+        $("report-empty").textContent = status === "interrupt"
+          ? "这份研究还停在人工审核，尚未生成报告。请回到工作区继续审批，完成后再从这里阅读。"
+          : (status === "interrupted"
+            ? "该会话执行已中断，没有生成报告。"
+            : "这条会话还没有可阅读的报告。");
+        return;
+      }
+      currentFinal = final;
+      renderReportChips(final);
+      renderReportBody(final);
+      renderEvidencePanel(final);
+      renderReportQuality(final);
+      renderReportDetails(final, data);
+      bindReportInteractions();
+      bindTocSpy();
+      applyReportFont(readSavedFont());
+    } catch (err) {
+      $("report-grid").hidden = true;
+      $("report-empty").hidden = false;
+      $("report-empty").textContent = "加载报告失败：" + err.message + "（确认后端在运行）";
+    }
+  }
+
+  if (reportThreadId) {
+    bindReportTools();
+  }
+
   // 页面加载时显示 LLM 模式；file:// 或后端不可用时自动进入静态演示模式
   // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始；?collapse=1 执行进度默认收起（深链/截图用）
   const urlParams = new URLSearchParams(location.search);
@@ -2865,6 +3451,9 @@
     else startResearch();
   }
 
+  if (reportThreadId) {
+    loadReport(reportThreadId);
+  } else {
   fetch("/api/health")
     .then((resp) => {
       if (!resp.ok) throw new Error("health " + resp.status);
@@ -2884,6 +3473,7 @@
       enableDemoMode();
       maybeAutostart();
     });
+  }
 })();
 </script>
 </body>

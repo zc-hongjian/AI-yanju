@@ -453,6 +453,17 @@ def index() -> FileResponse:
     return _file_response(INDEX_FILE, "缺少 index.html")
 
 
+@app.get("/report/{thread_id}", include_in_schema=False)
+def report_page(thread_id: str) -> FileResponse:
+    """报告阅读页：返回同一个 index.html，前端按路径进入 report 模式。
+
+    页面是只读视图：数据来自 GET /api/sessions/{thread_id} 的 final_output，
+    不触发任何图执行，也不会写 outbox。
+    """
+    del thread_id  # 路由参数只用于前端判断模式，服务端不需要
+    return _file_response(INDEX_FILE, "缺少 index.html")
+
+
 @app.get("/app", include_in_schema=False)
 def app_home() -> FileResponse:
     """主界面短链接：/app?settings=1 等价于 /index.html?settings=1。"""
