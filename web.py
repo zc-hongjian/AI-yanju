@@ -27,6 +27,7 @@ API：
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import queue
@@ -37,7 +38,7 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
@@ -66,7 +67,7 @@ def _bootstrap_dependency(exc: ModuleNotFoundError) -> None:
 
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Response
     from fastapi.responses import FileResponse, StreamingResponse
     from langgraph.types import Command
     from pydantic import BaseModel
@@ -74,6 +75,7 @@ try:
     from dotenv import load_dotenv
 
     import cancel
+    import docx_export
     from graph import build_graph
     from llm_client import LLMClient, get_llm
     import llm_client
@@ -285,11 +287,11 @@ def _session_get(thread_id: str) -> dict[str, Any] | None:
         return None
 
 
-def _session_list(limit: int = 20) -> list[dict[str, Any]]:
+def _session_list(limit: int = 20, query: str = "", status: str = "") -> list[dict[str, Any]]:
     if _STORE is None:
         return []
     try:
-        return _STORE.list(limit)
+        return _STORE.list(limit, query=query, status=status)
     except Exception:  # noqa: BLE001
         return []
 
@@ -499,10 +501,18 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/sessions")
-def list_sessions(limit: int = 20) -> dict[str, Any]:
-    """历史会话列表：问题、状态、更新时间；重启后仍可查（索引落 SQLite）。"""
-    rows = _session_list(limit)
-    return {"sessions": rows, "count": len(rows), "enabled": _STORE is not None}
+def list_sessions(limit: int = 20, q: str = "", status: str = "") -> dict[str, Any]:
+    """历史会话列表：问题、状态、更新时间；支持关键词与状态过滤。
+
+    ``q`` 同时匹配问题文本与 thread_id（历史里常见的是按关键词找“问过什么”）。
+    """
+    rows = _session_list(limit, query=q, status=status)
+    return {
+        "sessions": rows,
+        "count": len(rows),
+        "enabled": _STORE is not None,
+        "filters": {"q": q, "status": status},
+    }
 
 
 @app.get("/api/sessions/{thread_id}")
@@ -543,6 +553,112 @@ def get_session(thread_id: str) -> dict[str, Any]:
         "updated_at": str((row or {}).get("updated_at") or ""),
         "recoverable": interrupt_payload is not None,
     }
+
+
+def _report_body(text: str) -> str:
+    """只取正文（去掉「## 来源清单」之后的引用列表）：对比时来源列表变化没意义。"""
+    raw = str(text or "")
+    cut = raw.find("## 来源")
+    return raw[:cut] if cut > 0 else raw
+
+
+def _diff_reports(old_text: str, new_text: str, limit: int = 200) -> dict[str, Any]:
+    """比较两轮报告正文，返回增删行与统计（纯函数，便于单测）。"""
+    old_lines = [line for line in _report_body(old_text).splitlines() if line.strip()]
+    new_lines = [line for line in _report_body(new_text).splitlines() if line.strip()]
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    lines: list[dict[str, str]] = []
+    added = 0
+    removed = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag in {"delete", "replace"}:
+            for line in old_lines[i1:i2]:
+                lines.append({"op": "-", "text": line})
+                removed += 1
+        if tag in {"insert", "replace"}:
+            for line in new_lines[j1:j2]:
+                lines.append({"op": "+", "text": line})
+                added += 1
+    return {
+        "added": added,
+        "removed": removed,
+        "lines": lines[:limit],
+        "truncated": len(lines) > limit,
+    }
+
+
+@app.get("/api/sessions/{thread_id}/diff")
+def get_session_diff(thread_id: str) -> dict[str, Any]:
+    """多轮报告对比：本轮报告 vs 上一轮（parent_thread_id）的正文差异。"""
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    current = get_session(tid)
+    parent = str(current.get("parent_thread_id") or "").strip()
+    if not parent:
+        return {"available": False, "reason": "no_parent", "base_thread_id": ""}
+    try:
+        previous = get_session(parent)
+    except HTTPException:
+        return {"available": False, "reason": "parent_not_found", "base_thread_id": parent}
+    old_report = str((previous.get("final_output") or {}).get("report") or "")
+    new_report = str((current.get("final_output") or {}).get("report") or "")
+    if not old_report or not new_report:
+        return {"available": False, "reason": "report_missing", "base_thread_id": parent}
+    stats = _diff_reports(old_report, new_report)
+    return {
+        "available": True,
+        "base_thread_id": parent,
+        "base_question": str(previous.get("question") or ""),
+        **stats,
+    }
+
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _docx_filename(title: str) -> str:
+    """中文文件名用 RFC 5987 的 filename*，同时给一个 ASCII 兜底名。"""
+    safe = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "-", str(title or "")).strip("-")[:40]
+    safe = safe or "research-report"
+    return f"attachment; filename=\"report.docx\"; filename*=UTF-8''{quote(safe + '.docx')}"
+
+
+@app.get("/api/sessions/{thread_id}/export.docx")
+def export_session_docx(thread_id: str) -> Response:
+    """把已完成的报告导出为 Word（.docx）。没装 python-docx 时返回 503。"""
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    data = get_session(tid)
+    final = data.get("final_output") or {}
+    report = str(final.get("report") or "")
+    if not report.strip():
+        raise HTTPException(status_code=409, detail="这次会话还没有完成报告，无法导出 Word")
+    title = str(final.get("research_question") or data.get("question") or "研究报告")
+    coverage = final.get("coverage_summary") or {}
+    meta = [
+        ("状态", str(final.get("status") or data.get("status") or "")),
+        ("来源数", str(len(final.get("sources") or []))),
+        ("证据数", str(final.get("evidence_count") or 0)),
+        ("覆盖", f"{coverage.get('covered', 0)}/{coverage.get('total', 0)}" if coverage.get("total") else "-"),
+        ("耗时", f"{final.get('duration_ms', 0)} ms"),
+        ("模型", str(final.get("model") or final.get("llm_mode") or "-")),
+    ]
+    try:
+        blob = docx_export.markdown_to_docx(
+            report,
+            title=title,
+            meta=meta,
+            evidence=list(final.get("evidence") or []),
+        )
+    except docx_export.DocxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=blob,
+        media_type=DOCX_MIME,
+        headers={"Content-Disposition": _docx_filename(title)},
+    )
 
 
 @app.post("/api/sessions/{thread_id}/interrupt")

@@ -163,13 +163,26 @@ class SessionStore:
             ).fetchone()
         return self._row_to_dict(row) if row else None
 
-    def list(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list(self, limit: int = 20, query: str = "", status: str = "") -> list[dict[str, Any]]:
+        """历史列表：支持按关键词（问题 / thread_id）与状态过滤。"""
         limit = max(1, min(int(limit), 100))
+        clauses: list[str] = []
+        params: list[Any] = []
+        keyword = (query or "").strip()
+        if keyword:
+            like = f"%{keyword}%"
+            clauses.append("(question LIKE ? OR thread_id LIKE ?)")
+            params.extend([like, like])
+        wanted = (status or "").strip()
+        if wanted:
+            clauses.append("status = ?")
+            params.append(wanted)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT thread_id, trace_id, question, status, parent_thread_id, created_at, updated_at "
-                "FROM sessions ORDER BY updated_at DESC, rowid DESC LIMIT ?",
-                (limit,),
+                "FROM sessions" + where + " ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+                (*params, limit),
             ).fetchall()
         return [self._row_to_dict(row) for row in rows]
 

@@ -1331,6 +1331,63 @@
     .follow-hint { align-items: flex-start; }
     .link-btn { margin-left: 0; }
   }
+
+  /* ---------- P5 功能层（二）：历史检索 / 成本看板 / 报告 diff ---------- */
+  .history-tools { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 6px; }
+  .history-search { position: relative; flex: 1 1 240px; display: flex; align-items: center; }
+  .history-search input {
+    width: 100%; padding: 8px 12px 8px 34px; border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, .2); background: rgba(15, 23, 42, .55);
+    color: #e2e8f0; font-size: 13px;
+  }
+  .history-search input:focus { outline: 2px solid rgba(34, 211, 238, .45); outline-offset: 1px; }
+  .history-search .ask-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: #7dd3fc; pointer-events: none;
+  }
+  .history-search .ask-icon svg { width: 100%; height: 100%; }
+  .history-tools select {
+    padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, .2);
+    background: rgba(15, 23, 42, .55); color: #e2e8f0; font-size: 13px;
+  }
+  .report-diff {
+    margin: 14px 0; padding: 14px 16px; border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, .16); background: rgba(15, 23, 42, .55);
+  }
+  .report-diff-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .report-diff-head .btn { margin-left: auto; }
+  .diff-block {
+    margin: 10px 0 0; max-height: 420px; overflow: auto;
+    font-size: 12.5px; line-height: 1.55; white-space: pre-wrap;
+  }
+  .diff-line { display: block; padding: 1px 6px; border-radius: 4px; }
+  .diff-line.add { background: rgba(34, 197, 94, .12); color: #86efac; }
+  .diff-line.del { background: rgba(248, 113, 113, .12); color: #fca5a5; }
+  .cost-modal { width: min(760px, 100%); }
+  .cost-range { display: flex; gap: 8px; align-items: center; margin: 8px 0 6px; flex-wrap: wrap; }
+  .cost-range .preset { padding: 6px 12px; border-radius: 999px; }
+  .cost-range .btn { margin-left: auto; }
+  .cost-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+  .cost-cell {
+    margin: 0; padding: 10px 12px; border-radius: 12px;
+    background: rgba(148, 163, 184, .06); border: 1px solid rgba(148, 163, 184, .14);
+  }
+  .cost-cell dt { font-size: 11.5px; color: var(--muted); }
+  .cost-cell dd { margin: 4px 0 0; font-size: 15px; color: #e2e8f0; }
+  .cost-block { margin-top: 12px; }
+  .cost-block h3 { margin: 0 0 6px; font-size: 13px; color: #cbd5e1; }
+  .cost-days { display: grid; gap: 6px; }
+  .cost-day {
+    display: grid; grid-template-columns: 92px minmax(120px, 1fr) 148px;
+    gap: 10px; align-items: center; font-size: 12px;
+  }
+  .cost-bar-wrap { height: 8px; border-radius: 999px; background: rgba(148, 163, 184, .12); overflow: hidden; }
+  .cost-bar { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #22d3ee, #8b5cf6); }
+  .cost-day-value { text-align: right; color: #94a3b8; }
+  @media (max-width: 760px) {
+    .cost-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cost-day { grid-template-columns: 82px minmax(70px, 1fr) 118px; }
+  }
 </style>
 </head>
 <body>
@@ -1367,6 +1424,7 @@
       <span class="pill mode-pill" id="mode-pill">模式检测中</span>
       <span class="pill" id="thread-pill" hidden></span>
       <nav class="nav-pill" aria-label="页面导航">
+        <button class="btn ghost settings-btn" id="cost-btn" type="button">成本</button>
         <button class="btn ghost settings-btn" id="history-btn" type="button">历史会话</button>
         <button class="btn ghost settings-btn" id="settings-btn" type="button">
           <span class="gear" aria-hidden="true">⚙</span> 模型设置
@@ -1461,6 +1519,21 @@
       </div>
     </div>
     <p class="hint">会话状态存在后端 SQLite（<code>data/checkpoints.sqlite</code>），服务重启后仍可从这里「继续审批」。</p>
+    <div class="history-tools">
+      <div class="history-search">
+        <span class="ask-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg></span>
+        <input id="history-search" type="search" placeholder="搜索问题或会话编号…" aria-label="搜索历史会话">
+      </div>
+      <select id="history-status" aria-label="按状态筛选">
+        <option value="">全部状态</option>
+        <option value="completed">已完成</option>
+        <option value="interrupt">待审批</option>
+        <option value="running">进行中</option>
+        <option value="interrupted">已中断</option>
+        <option value="cancelled">已取消</option>
+        <option value="failed">失败</option>
+      </select>
+    </div>
     <div class="history-list" id="history-list"></div>
   </section>
 
@@ -1584,6 +1657,7 @@
     </details>
     <div class="actions">
       <button class="btn primary" id="download-report">下载 Markdown 报告</button>
+      <button class="btn ghost" id="download-word" type="button" hidden>下载 Word</button>
       <button class="btn ghost" id="follow-up" type="button" hidden>继续追问</button>
       <button class="btn ghost" id="open-report" type="button" hidden>阅读报告页</button>
       <button class="btn ghost" id="restart-btn">开始新的研究</button>
@@ -1626,6 +1700,7 @@
         </div>
         <button class="btn ghost" id="report-follow" type="button" hidden>继续追问</button>
         <button class="btn ghost" id="report-word" type="button" hidden>下载 Word</button>
+        <button class="btn ghost" id="report-diff" type="button" hidden>与上一轮对比</button>
         <button class="btn ghost" id="report-copy" type="button">复制链接</button>
         <button class="btn ghost" id="report-print" type="button">打印 / PDF</button>
         <button class="btn primary" id="report-download" type="button">下载 MD</button>
@@ -1633,6 +1708,15 @@
     </div>
 
     <p class="report-empty" id="report-empty" hidden></p>
+
+    <section class="report-diff" id="report-diff-panel" hidden>
+      <div class="report-diff-head">
+        <strong>与上一轮报告的差异</strong>
+        <span class="muted" id="report-diff-meta"></span>
+        <button class="btn ghost" id="report-diff-close" type="button">收起</button>
+      </div>
+      <div id="report-diff-body"></div>
+    </section>
 
     <div class="report-grid" id="report-grid">
       <aside class="report-toc" aria-label="报告目录">
@@ -1719,6 +1803,37 @@
       <button class="btn ghost" id="test-connection" type="button">测试连接</button>
       <button class="btn primary" id="save-config" type="button">保存并使用</button>
       <button class="btn danger" id="clear-config" type="button">清除运行时配置</button>
+    </div>
+  </section>
+</div>
+
+<div class="modal-backdrop" id="cost-modal" hidden>
+  <section class="modal cost-modal" role="dialog" aria-modal="true" aria-labelledby="cost-title">
+    <div class="modal-head">
+      <div>
+        <p class="eyebrow">OBSERVABILITY</p>
+        <h2 id="cost-title">成本看板</h2>
+      </div>
+      <button class="icon-btn" id="cost-close" type="button" aria-label="关闭">×</button>
+    </div>
+    <p class="settings-note">
+      数据来自 <code>logs/*.trace.jsonl</code> 的节点 Span：运行数、模型调用次数、token 与估算成本。
+      未录入价目表的模型会标记「估算」。
+    </p>
+    <div class="cost-range" id="cost-range">
+      <button class="preset active" type="button" data-days="7">近 7 天</button>
+      <button class="preset" type="button" data-days="30">近 30 天</button>
+      <button class="btn ghost" id="cost-refresh" type="button">刷新</button>
+    </div>
+    <p class="hint" id="cost-meta">正在读取…</p>
+    <div class="cost-grid" id="cost-totals"></div>
+    <div class="cost-block">
+      <h3>按模型</h3>
+      <div id="cost-models"></div>
+    </div>
+    <div class="cost-block">
+      <h3>按天</h3>
+      <div id="cost-days"></div>
     </div>
   </section>
 </div>
@@ -2210,14 +2325,24 @@
     return labels[status] || (status || "未知");
   }
 
+  let historySearch = "";        // 历史会话关键词（防抖后生效）
+  let historyStatusFilter = "";  // 历史会话状态筛选
+  let historySearchTimer = null;
+  let costDays = 7;              // 成本看板统计窗口（天）
+
   async function loadHistory() {
     const list = $("history-list");
     list.innerHTML = '<p class="muted">加载中…</p>';
     try {
-      const data = await fetchJson("/api/sessions?limit=20");
+      const params = new URLSearchParams({ limit: "20" });
+      if (historySearch) params.set("q", historySearch);
+      if (historyStatusFilter) params.set("status", historyStatusFilter);
+      const data = await fetchJson("/api/sessions?" + params.toString());
       historyRows = data.sessions || [];
       if (!historyRows.length) {
-        list.innerHTML = '<p class="muted">还没有历史会话。完成或中断一次研究后会出现在这里。</p>';
+        list.innerHTML = (historySearch || historyStatusFilter)
+          ? '<p class="muted">没有匹配的会话。换个关键词，或把状态筛选改回「全部状态」。</p>'
+          : '<p class="muted">还没有历史会话。完成或中断一次研究后会出现在这里。</p>';
         return;
       }
       list.innerHTML = historyRows.map((row) => {
@@ -2249,6 +2374,91 @@
     } catch (err) {
       list.innerHTML = '<p class="muted">加载失败：' + escapeHtml(err.message || String(err)) + '</p>';
     }
+  }
+
+  // ---------- 成本看板：/api/cost/summary 的 7/30 天聚合 ----------
+  function openCost() {
+    if (demoMode) {
+      showError("静态演示模式没有成本数据：请先运行 python web.py。");
+      return;
+    }
+    $("cost-modal").hidden = false;
+    document.body.style.overflow = "hidden";
+    loadCost();
+  }
+
+  function closeCost() {
+    $("cost-modal").hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  async function loadCost() {
+    $("cost-meta").textContent = "正在读取…";
+    try {
+      const data = await fetchJson("/api/cost/summary?days=" + costDays);
+      renderCost(data);
+    } catch (err) {
+      $("cost-meta").textContent = "读取失败：" + (err.message || String(err));
+    }
+  }
+
+  function money(value) {
+    return "¥" + (Number(value) || 0).toFixed(4);
+  }
+
+  function renderCost(data) {
+    const totals = data.totals || {};
+    $("cost-meta").textContent =
+      "统计窗口 " + (data.days || costDays) + " 天 · " + (totals.runs || 0) + " 次运行 · " +
+      (totals.calls || 0) + " 次模型调用" +
+      ((totals.estimated_runs || 0) ? " · 其中 " + totals.estimated_runs + " 次含估算成本" : "");
+    const cells = [
+      ["运行数", String(totals.runs || 0)],
+      ["模型调用", String(totals.calls || 0)],
+      ["输入 token", String(totals.prompt_tokens || 0)],
+      ["输出 token", String(totals.completion_tokens || 0)],
+      ["总 token", String(totals.total_tokens || 0)],
+      ["成本", money(totals.cost_cny)],
+    ];
+    $("cost-totals").innerHTML = cells.map(([label, value]) =>
+      '<dl class="cost-cell"><dt>' + escapeHtml(label) + '</dt><dd class="mono">' +
+      escapeHtml(value) + "</dd></dl>").join("");
+
+    const models = data.by_model || [];
+    $("cost-models").innerHTML = models.length
+      ? '<table class="md-table"><thead><tr><th>模型</th><th>调用</th><th>token</th><th>成本</th></tr></thead><tbody>' +
+        models.map((row) =>
+          "<tr><td class='mono'>" + escapeHtml(row.model || "-") + "</td><td>" + (row.calls || 0) +
+          "</td><td>" + (row.total_tokens || 0) + "</td><td>" + escapeHtml(money(row.cost_cny)) + "</td></tr>"
+        ).join("") + "</tbody></table>"
+      : '<p class="muted">这个时间段还没有模型调用记录。</p>';
+
+    const days = data.by_day || [];
+    const maxCost = Math.max(0.0000001, ...days.map((row) => Number(row.cost_cny) || 0));
+    $("cost-days").innerHTML = days.length
+      ? '<div class="cost-days">' + days.map((row) => {
+          const value = Number(row.cost_cny) || 0;
+          const width = Math.max(2, Math.round((value / maxCost) * 100));
+          return '<div class="cost-day"><span class="mono cost-day-label">' + escapeHtml(row.date) + "</span>" +
+            '<span class="cost-bar-wrap"><span class="cost-bar" style="width:' + width + '%"></span></span>' +
+            '<span class="mono cost-day-value">' + escapeHtml(money(value)) + " · " + (row.runs || 0) + " 次</span></div>";
+        }).join("") + "</div>"
+      : '<p class="muted">还没有按天的数据。</p>';
+  }
+
+  // ---------- 历史检索：关键词 + 状态筛选 ----------
+  function bindHistorySearch() {
+    $("history-search").addEventListener("input", () => {
+      clearTimeout(historySearchTimer);
+      historySearchTimer = setTimeout(() => {
+        historySearch = $("history-search").value.trim();
+        loadHistory();
+      }, 300);
+    });
+    $("history-status").addEventListener("change", () => {
+      historyStatusFilter = $("history-status").value;
+      loadHistory();
+    });
   }
 
   async function loadSession(sessionThreadId) {
@@ -2524,6 +2734,7 @@
   function showFinal(final) {
     currentFinal = final;
     if ($("open-report")) $("open-report").hidden = !threadId || demoMode;
+    if ($("download-word")) $("download-word").hidden = !threadId || demoMode;
     if ($("follow-up")) $("follow-up").hidden = !threadId || demoMode;
     $("final-status").textContent = STATUS_TEXT[final.status] || final.status || "完成";
     const meta = [
@@ -3202,6 +3413,21 @@
 
   $("settings-btn").addEventListener("click", openSettings);
   $("history-btn").addEventListener("click", openHistory);
+  bindHistorySearch();
+  $("cost-btn").addEventListener("click", openCost);
+  $("cost-close").addEventListener("click", closeCost);
+  $("cost-refresh").addEventListener("click", loadCost);
+  $("cost-modal").addEventListener("click", (event) => {
+    if (event.target === $("cost-modal")) closeCost();
+  });
+  document.querySelectorAll("#cost-range [data-days]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#cost-range [data-days]").forEach((item) => item.classList.remove("active"));
+      btn.classList.add("active");
+      costDays = Number(btn.dataset.days) || 7;
+      loadCost();
+    });
+  });
   $("history-refresh").addEventListener("click", loadHistory);
   $("history-close").addEventListener("click", () => { $("history-card").hidden = true; });
   $("settings-close").addEventListener("click", closeSettings);
@@ -3211,6 +3437,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!$("confirm-modal").hidden) { closeConfirm(false); return; }
+    if (!$("cost-modal").hidden) { closeCost(); return; }
     if (!$("settings-modal").hidden) closeSettings();
   });
   $("toggle-key").addEventListener("click", () => {
@@ -3310,6 +3537,7 @@
     link.click();
     URL.revokeObjectURL(link.href);
   });
+  $("download-word").addEventListener("click", () => downloadWord(threadId));
 
   $("restart-btn").addEventListener("click", () => {
     resetAll();
@@ -3606,6 +3834,45 @@
     });
   }
 
+  // 下载 Word：走整页跳转，浏览器原生处理 Content-Disposition
+  function downloadWord(tid) {
+    if (!tid) return;
+    location.href = "/api/sessions/" + encodeURIComponent(tid) + "/export.docx";
+  }
+
+  async function loadReportDiff() {
+    if (!reportThreadId) return;
+    const panel = $("report-diff-panel");
+    panel.hidden = false;
+    $("report-diff-body").innerHTML = '<p class="muted">正在对比…</p>';
+    $("report-diff-meta").textContent = "";
+    try {
+      const data = await fetchJson("/api/sessions/" + encodeURIComponent(reportThreadId) + "/diff");
+      if (!data.available) {
+        const reasons = {
+          no_parent: "这份报告是首轮研究，没有可对比的上一轮。",
+          parent_not_found: "上一轮会话已被删除，无法对比。",
+          report_missing: "上一轮或本轮还没有完整报告。",
+        };
+        $("report-diff-body").innerHTML =
+          '<p class="muted">' + escapeHtml(reasons[data.reason] || "暂时无法对比。") + "</p>";
+        return;
+      }
+      $("report-diff-meta").textContent =
+        "新增 " + data.added + " 行 · 删除 " + data.removed + " 行" +
+        (data.truncated ? " · 已截断" : "") +
+        " · 对比基线 " + shortThreadId(data.base_thread_id);
+      $("report-diff-body").innerHTML = data.lines.length
+        ? '<pre class="diff-block">' + data.lines.map((line) =>
+            '<span class="diff-line ' + (line.op === "+" ? "add" : "del") + '">' +
+            escapeHtml(line.op + " " + line.text) + "</span>").join("\n") + "</pre>"
+        : '<p class="muted">正文没有变化（可能只改了来源列表）。</p>';
+    } catch (err) {
+      $("report-diff-body").innerHTML =
+        '<p class="muted">对比失败：' + escapeHtml(err.message || String(err)) + "</p>";
+    }
+  }
+
   function bindReportTools() {
     $("report-print").addEventListener("click", () => window.print());
     const followBtn = $("report-follow");
@@ -3615,6 +3882,19 @@
         // 回到工作区，并把“基于哪一轮追问”通过 URL 带过去（后端只认 parent_thread_id）
         location.href = "/app?follow=" + encodeURIComponent(reportThreadId);
       });
+    }
+    if ($("report-word")) {
+      $("report-word").addEventListener("click", () => downloadWord(reportThreadId));
+    }
+    if ($("report-diff")) {
+      $("report-diff").addEventListener("click", () => {
+        const panel = $("report-diff-panel");
+        if (panel.hidden) loadReportDiff();
+        else panel.hidden = true;
+      });
+    }
+    if ($("report-diff-close")) {
+      $("report-diff-close").addEventListener("click", () => { $("report-diff-panel").hidden = true; });
     }
     $("report-copy").addEventListener("click", () => {
       const url = location.href;
@@ -3663,6 +3943,9 @@
       }
       currentFinal = final;
       if ($("report-follow")) $("report-follow").hidden = !reportThreadId;
+      if ($("report-word")) $("report-word").hidden = !reportThreadId;
+      if ($("report-diff")) $("report-diff").hidden = !data.parent_thread_id;
+      if ($("report-diff-panel")) $("report-diff-panel").hidden = true;
       renderReportChips(final);
       renderReportBody(final);
       renderEvidencePanel(final);
