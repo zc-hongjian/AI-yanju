@@ -266,6 +266,18 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 - **报告 diff**：`_diff_reports()` 纯函数（只比正文、去掉来源清单、上限 200 行），
   `GET /api/sessions/{tid}/diff`；报告页「与上一轮对比」展开红绿差异。
 
+### 6.13 界面细节：鼠标聚光灯（2026-11-17）
+
+- 作用域：`.card`（提问台 / 流水线卡片 / 历史卡）、`.feature`（首页能力卡）、`.report-body`（报告正文）。
+- 光斑：`.card::after` 两层同心 `radial-gradient`（内层 `rgba(125,211,252,.18)` 亮核 +
+  外层青→紫 `rgba(56,189,248,.09)`/`rgba(139,92,246,.06)` 光晕），默认 `opacity:0`，
+  命中时加 `.is-lit` 过渡到 1。
+- 跟随：`bindCardSpotlight()` 在 `document` 上代理 `pointermove`，把相对卡片的坐标写进
+  `--spot-x / --spot-y`；坐标读取与重绘用一次 `rAF` 合并，`getBoundingClientRect` 只在进入
+  卡片和滚动/缩放时取。
+- 约束：`inset:0 + pointer-events:none`，不占布局、不挡点击；`(hover:hover) and (pointer:fine)`
+  才启用（触屏无关）；`prefers-reduced-motion` 去掉过渡；`@media print` 直接隐藏。
+
 ## 7. 评测与验收结果
 
 ### 7.1 真实联网 40 题（离线 LLM + 真实检索，未调用付费 API）
