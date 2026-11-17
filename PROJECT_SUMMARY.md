@@ -2,7 +2,7 @@
 
 > 快照时间：2026-11-09
 > 代码位置：`D:\Build\AI-hy`
-> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」、**报告质量闭环（证据卡片化 → 大纲 → 分节写作 → 引用硬校验）**均已落地，并通过 **166 个测试**、9 项功能验收、6/6 知识库验收；工作区与远端一致（最新提交见 `git log -1`）。
+> 当前状态：P0「研究质量闭环」、网页「模型设置」、P0-1「会话持久化与多轮」、P0-2「Trace + 成本归因」、P0-3「混合检索 RAG」、**报告质量闭环（证据卡片化 → 大纲 → 分节写作 → 引用硬校验）**、**体验闭环（多轮追问 / 取消运行 / 知识库面板）**、**性能与可靠性（缓存 / 并发抓取 / 写操作幂等）**、**交付物（Word 导出 / 历史检索 / 成本看板 / 报告 diff）**均已落地，并通过 **226 个测试**、9 项功能验收、6/6 知识库验收；工作区与远端一致（最新提交见 `git log -1`）。
 
 ---
 
@@ -27,14 +27,14 @@
 | Web | FastAPI + Uvicorn + 深色主题单页 `index.html`（NDJSON 流式日志；右上角可填 Key/Base/模型） |
 | 网页处理 | requests + BeautifulSoup + charset-normalizer |
 | 评测 | 自研 40 题数据集 + mock/真实联网/真实 LLM 三种模式 |
-| 代码规模 | `graph.py` ~1640 行、`tools.py` ~1133 行、`llm_client.py` ~1000 行、`quality.py` ~361 行、`reporting.py` ~600 行、`web.py` ~587 行、`persistence.py` ~176 行、`rag.py` ~423 行、`tracing.py` ~266 行、`index.html` ~1899 行 |
-| 质量状态 | 152 个 pytest 用例通过；9 项功能闭环验收 9/9；6/6 知识库验收；40 题真实联网评测完成；会话可跨进程恢复；报告有引用硬校验与回退保护 |
+| 代码规模 | `graph.py` ~1633 行、`tools.py` ~1007 行、`llm_client.py` ~916 行、`web.py` ~732 行、`reporting.py` ~582 行、`persistence.py` ~336 行、`quality.py` ~296 行、`tracing.py` ~232 行、`docx_export.py` ~214 行、`rag.py` ~389 行、`cache.py` ~113 行、`index.html` ~3782 行 |
+| 质量状态 | 226 个 pytest 用例通过；9 项功能闭环验收 9/9；6/6 知识库验收；40 题真实联网评测完成；会话可跨进程恢复；报告有引用硬校验与回退保护；写操作有审计与幂等；搜索/抓取有 TTL 缓存与并发抓取 |
 
 ## 3. 目录结构
 
 ```text
 AI-hy/
-├── 原型图/               # 页面原型/界面截图（15 张，原 docs/）
+├── 原型图/               # 页面原型/界面截图（22 张，原 docs/）
 ├── 开发文档/             # 接口文档、数据库设计、OPTIMIZATION、验收/评测报告
 ├── frontend/             # 前端代码索引（代码仍在根目录）
 ├── backend/              # 后端代码索引（代码仍在根目录）
@@ -54,7 +54,10 @@ AI-hy/
 ├── human_review.py       # 命令行人工确认（草稿 / 写操作参数）
 ├── main.py               # CLI 入口（interrupt → resume 循环）
 ├── web.py                # Web 入口（FastAPI，复用同一张图与门禁）
-├── persistence.py        # SQLite checkpointer + 会话索引表（历史/多轮/删除）
+├── cancel.py             # 协作式取消登记表（节点边界生效，不强杀线程）
+├── cache.py              # 搜索/抓取 TTL 缓存（SQLite，默认 24h）
+├── docx_export.py        # 报告 Markdown → Word(.docx) 导出
+├── persistence.py        # SQLite checkpointer + 会话索引表 + 写操作审计/幂等表
 ├── index.html            # 单页前端：双击演示，或由 web.py 托管连真实后端
 ├── launch.html           # 一键启用启动页（探活 → 进主界面并弹模型设置）
 ├── start.bat             # Windows 一键启动：起 web.py + 自动打开启动页
@@ -63,7 +66,7 @@ AI-hy/
 ├── knowledge/            # 本地知识库（3 篇 md）
 ├── config/pricing.json   # 模型价目表
 ├── data/ logs/ outbox/   # 运行期产物（gitignore）
-├── tests/                # 24 个测试文件 / 171 个用例
+├── tests/                # 36 个测试文件 / 226 个用例
 ├── README.md             # 使用与验收文档
 ├── PROJECT_SUMMARY.md    # 本文
 ├── requirements.txt
@@ -231,6 +234,38 @@ status, retry_count, latency_ms, error, timestamp, trace_id
 另外 `retrieve_knowledge` 增加问题词面相关性门槛：与问题无交集的 KB 片段不再进入证据链
 （实测会把本项目自己的 RAG 设计文档混进“LangGraph vs AutoGen”报告）。
 
+### 6.10 体验闭环：多轮追问 / 取消运行 / 知识库面板（2026-11-17）
+
+| 能力 | 实现 | 解决的问题 |
+| --- | --- | --- |
+| 多轮追问入口 | 终稿卡与报告页「继续追问」→ 前端把 `parent_thread_id` 随 `/api/research` 发出；支持 `/app?follow=<tid>` 深链；历史列表显示「↳ 追问自」 | 后端早已支持多轮，但页面上没有入口，宣称的能力点不到 |
+| 取消运行 | `cancel.py`（`threading.Event` 登记表）+ `graph._instrument` 节点入口检查并抛 `ResearchCancelled`（不写 error span）；`POST /api/sessions/{tid}/cancel` + 流式 `cancelled` 终态 + 会话状态 `cancelled`；前端 AbortController | 15~30s 的运行原来只能等或杀后端；取消后界面显示「已取消 · N%」而不是误报断网 |
+| 知识库面板 | `rag.knowledge_documents()` + `GET /api/kb`、`POST /api/kb/reindex`；设置弹层列出文档/分块/向量状态并可一键重建索引 | RAG 原来只有接口没有可见入口，改了 `knowledge/` 也不知道是否生效 |
+
+取消的语义取舍写在 `cancel.py` 头部：**不杀线程**，只在节点边界生效，
+避免半写 checkpoint / 半落 outbox；最坏延迟受节点 HTTP 预算约束（约 15~20s）。
+
+### 6.11 性能与可靠性：缓存 / 并发抓取 / 写操作幂等（2026-11-17）
+
+| 能力 | 实现 | 效果 |
+| --- | --- | --- |
+| 搜索/抓取 TTL 缓存 | `cache.py`：SQLite `cache(kind, key_hash, value, created_at)`；只缓存成功结果；`AGENT_CACHE_ENABLED` / `AGENT_CACHE_TTL` | 同一问题二次运行实测 **23.8s → 3.4s**（4 个页面全部命中缓存） |
+| 并发抓取 | `graph._fetch_batch()` + `ThreadPoolExecutor`，按排名分批（默认 3，`AGENT_FETCH_CONCURRENCY` 夹取 1~6），结果按提交顺序归并 | 最终页面集合与串行版一致；并发度 1 完全退回旧行为（可回归对比） |
+| 写操作审计 + 幂等 | `persistence.WriteAuditStore`：`write_actions(run_key, action, payload_hash, status, mode, detail, …)` + 唯一索引；`execute_actions` 执行前查询同参数是否已成功 | 修复“写成功后进程被杀、恢复时节点重跑导致重复发邮件/重复写 Notion”的真实风险；参数改过仍会正常执行 |
+| 控制台编码兜底 | `logging_utils.ensure_utf8_stdout()`，`web.py` / `main.py` 启动时调用 | 修复 GBK 控制台打印 `¥` 触发 `UnicodeEncodeError`、把一次正常运行标成 failed |
+
+### 6.12 交付物：Word 导出 / 历史检索 / 成本看板 / 报告 diff（2026-11-17）
+
+- **Word 导出**：`docx_export.py`（Markdown → docx：标题/段落/列表/引用/粗体/行内代码/
+  `[S#]` 上标/超链接/表格 + 证据表附录），`GET /api/sessions/{tid}/export.docx`；
+  依赖 `python-docx`，懒加载，未安装返回 503 而不是让服务起不来。
+- **历史检索**：`SessionStore.list(query, status)` + `GET /api/sessions?q=&status=`，
+  前端历史卡加搜索框（300ms 防抖）与状态下拉。
+- **成本看板**：复用 `/api/cost/summary`，前端弹窗展示近 7/30 天运行数 / 调用次数 /
+  token / 成本，按模型表 + 按天条形图。
+- **报告 diff**：`_diff_reports()` 纯函数（只比正文、去掉来源清单、上限 200 行），
+  `GET /api/sessions/{tid}/diff`；报告页「与上一轮对比」展开红绿差异。
+
 ## 7. 评测与验收结果
 
 ### 7.1 真实联网 40 题（离线 LLM + 真实检索，未调用付费 API）
@@ -268,7 +303,7 @@ mock 只验证流水线机制（搜索→抓取→证据→报告→引用→人
 
 - `evaluation/acceptance_check.py`：**9/9 通过**，覆盖问题拆解、联网搜索、抓取清洗、证据表、
   结构化报告、引用校验、三处人工暂停 + 写门禁、重试降级、可观测；
-- `pytest`：**166 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮/删除、P0-2 Trace/成本、P0-3 RAG、报告质量 21 例、中断与会话删除）。
+- `pytest`：**226 passed**（含 P0 覆盖度/补检/断言校验、Web 模型配置、P0-1 持久化/多轮/删除、P0-2 Trace/成本、P0-3 RAG、报告质量 21 例、中断与会话删除、多轮追问、取消运行、知识库接口、缓存/并发/幂等、Word 导出、历史检索、成本看板、报告 diff）。
 
 ## 8. 运行方式
 
@@ -358,11 +393,11 @@ python evaluation/acceptance_check.py
 2. **写操作默认 dry-run**：未配置 SMTP/Notion 时只落盘模拟，不会真实发送/同步。
 3. **检索质量是瓶颈**：真实评测子问题覆盖率 51.2%，主要卡在对比题只抓到一方、站点 403/521/JS 空页。
 4. **断言支持率是规则代理**：99.4% 不代表语义蕴含，不能替代人工审计；高抽象改写可能被误判。
-5. **延迟上升**：补检让平均延迟 15.6s、P95 26.7s，接近 30s 目标线。
+5. **延迟**：首次单题平均 15.6s、P95 26.7s（补检抬升）；同一问题再次运行命中缓存可降到 ~3s。
 6. **真实 LLM 未全量评测**：40 题仍是离线 LLM（token/成本为 0）；真实模型只做过 1 题 smoke
    （`llm_smoke`），接入后需重跑。
-7. **单机单用户**：无登录、无多用户隔离；历史会话有列表/恢复/删除，但没有独立报告库与检索。
-8. **工程化不足**：依赖未锁定、无 CI、搜索/抓取无缓存、搜索与抓取串行。
+7. **单机单用户**：无登录、无多用户隔离；历史会话有列表/恢复/删除/检索，但没有独立报告库与权限。
+8. **工程化仍不足**：依赖未锁定、无 CI、无 Docker；搜索/抓取已有缓存与并发（默认 3），但抓取仍受站点 403/JS 空页限制。
 9. **安全**：`.env` 含真实 Key，已在 `.gitignore` 中；网页填写的 Key 只存进程内存、页面只显示掩码，不会写回 `.env`，但不要暴露到公网。
 10. **SQLite 并发**：单写者模型，WAL 下小流量够用；不要用多个 uvicorn worker 同时跑。
 11. **知识库规模**：向量用纯 Python 余弦，约 1 万 chunk 上限；embedding 需要服务提供 `/embeddings`（DeepSeek 不提供，可换智谱 `embedding-3` 或只用 BM25）。
@@ -373,6 +408,13 @@ python evaluation/acceptance_check.py
    已知问题（写入 `draft_review`，不阻塞流程）。
 15. **中断后只能重跑，不能续跑**：checkpoint 只保证“人工审批点可恢复”；如果进程在普通节点执行中
    被杀（还没到 interrupt），这次运行会被标成 `interrupted`，可以重新开始或删除会话，但不能从第 N 步接着跑。
+16. **取消是协作式的**：只在节点边界生效（当前节点若在 HTTP 预算内，最迟约 15~20s 停下），
+    不强杀线程；取消后会话标 `cancelled`，同样只能重跑。
+17. **Word 导出依赖可选包**：需要 `python-docx`（已写进 `requirements.txt`）；未安装时接口 503，
+    其它功能不受影响。
+18. **缓存/审计库会增长**：`data/cache.sqlite` 按 TTL 过期（默认 24h），`data/write_audit.sqlite`
+    是审计留痕默认不自动清理，长期运行需要归档策略。
+19. **报告 diff 只看正文**：不比较来源列表，最多返回 200 行差异（超出标记 `truncated`）。
 
 ## 10. 优化路线（详见 [开发文档/OPTIMIZATION.md](开发文档/OPTIMIZATION.md)）
 
@@ -390,19 +432,23 @@ python evaluation/acceptance_check.py
 - ~~节点级 Trace、成本归因、价目表~~（P0-2 已完成）；
 - ~~本地知识库混合检索（BM25 + 向量 + RRF）~~（P0-3 已完成）；
 - ~~报告质量闭环：证据卡片化 / 大纲 / 分节写作 / 引用硬校验~~（已完成，见 §6.9）；
-- 取消运行、LLM token 流式、页面内改稿、历史报告导出；
-- 真实模型 + LLM-as-judge 评测；提示注入防御与审计。
+- ~~多轮追问入口、取消运行、知识库面板~~（已完成，见 §6.10）；
+- ~~搜索/抓取缓存、并发抓取、写操作审计/幂等、GBK 控制台兜底~~（已完成，见 §6.11）；
+- ~~Word 导出、历史检索、成本看板、多轮报告 diff~~（已完成，见 §6.12）；
+- 仍待做：LLM token 流式、页面内改稿、断点续跑（普通节点中断后从第 N 步继续）；
+- 真实模型 + LLM-as-judge 评测；提示注入防御。
 
 ### P1 工程化
 
-- 搜索/抓取缓存、并发抓取（降低 P95）；
+- ~~搜索/抓取缓存、并发抓取（降低 P95）~~（已完成，见 §6.11）；
 - PDF 解析、官方搜索 API（Tavily/Bocha/Serper）作为第一提供方；
 - 依赖锁定、CI（pytest + mock eval + 前端语法检查）、Docker 部署。
 
 ### P2 产品化
 
-- 报告导出 Word/PDF/分享链接、历史库；
-- 真实 SMTP/Notion + 幂等键 + 审批审计；
+- ~~报告导出 Word、历史检索、成本看板、多轮报告 diff~~（已完成，见 §6.12）；
+- 服务端 PDF、分享链接（当前为只读报告页 + 打印/PDF）；
+- ~~真实 SMTP/Notion 前的幂等键 + 写操作审计~~（已完成，见 §6.11）；
 - 登录/多用户/配额、OpenTelemetry/LangSmith trace、指标面板。
 
 ## 11. 关键文件索引
@@ -421,7 +467,10 @@ python evaluation/acceptance_check.py
 | [prompts.py](prompts.py) | 全部提示词 |
 | [web.py](web.py) / [index.html](index.html) | Web 后端 / 单页前端 |
 | [launch.html](launch.html) / [start.bat](start.bat) | 一键启用启动页 / Windows 启动脚本 |
-| [persistence.py](persistence.py) | SQLite checkpointer + 会话索引（历史/多轮） |
+| [cancel.py](cancel.py) | 协作式取消登记表（节点边界生效） |
+| [cache.py](cache.py) | 搜索/抓取 TTL 缓存 |
+| [docx_export.py](docx_export.py) | 报告 Markdown → Word 导出 |
+| [persistence.py](persistence.py) | SQLite checkpointer + 会话索引（历史/多轮）+ 写操作审计/幂等 |
 | [rag.py](rag.py) | 知识库分块 / BM25 / 向量 / RRF / 索引缓存 |
 | [tracing.py](tracing.py) | 节点 Span + 模型价目表成本归因 |
 | [knowledge/](knowledge/) | 本地知识库文档（3 篇，14 个片段） |

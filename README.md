@@ -5,7 +5,7 @@
 >
 > 14 节点 LangGraph 图 · 3 次 human-in-the-loop · 引用可回溯 · 断点恢复 · 可观测 Trace/成本 · 本地知识库 RAG
 
-**当前状态**：166 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
+**当前状态**：226 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
 
 ---
 
@@ -135,6 +135,34 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 
 ![报告阅读页](原型图/web-ui-report.png)
 
+**多轮追问**：终稿卡或报告页点「继续追问」，输入框上方会出现「基于上一轮结论追问」提示，
+新一轮会把上一轮结论摘要作为上下文注入（后端 `parent_thread_id`），历史列表里也能看到追问链。
+
+![多轮追问](原型图/web-ui-followup.png)
+
+**取消运行**：15~30s 的研究过程中，进度卡右上角有「取消运行」。取消是协作式的——
+只在**节点边界**生效（不会强杀线程、不会留下半写状态），界面会显示「已取消 · N%」而不是误报成连接中断。
+
+![取消运行](原型图/web-ui-cancelled.png)
+
+**历史检索**：历史会话支持按关键词（问题 / 会话号）搜索和按状态筛选。
+
+![历史检索](原型图/web-ui-history-search.png)
+
+**成本看板**：右上角「成本」打开近 7/30 天的运行数、模型调用、token 与成本聚合（按模型 / 按天）。
+
+![成本看板](原型图/web-ui-cost.png)
+
+**导出 Word**：终稿卡与报告页都能「下载 Word」，导出的 `.docx` 含标题、指标、正文、表格与证据表附录。
+
+**报告对比**：多轮追问生成的报告，可在报告页点「与上一轮对比」看正文增删（红绿差异，不含来源列表）。
+
+![报告对比](原型图/web-ui-report-diff.png)
+
+**知识库面板**：模型设置弹层里能看到知识库文档数/分块数/是否启用向量，并一键「重建索引」。
+
+![知识库面板](原型图/web-ui-kb.png)
+
 **模型设置**：提供方预设、Key 掩码显示、测试连接、保存到进程内存、清除运行时配置。
 
 ![模型设置面板](原型图/web-ui-settings.png)
@@ -152,6 +180,9 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 | 会话持久化与多轮 | SQLite checkpointer 断点恢复 + 会话索引；`parent_thread_id` 注入上一轮结论（≤1200 字） |
 | 可观测 | 节点 Span（耗时/token/成本）、价目表最长前缀匹配、未知模型标「估算」、`/api/trace` 与成本汇总 |
 | 知识库 RAG | 标题分块（800/120 重叠）→ BM25（中文 bigram）→ 可选向量 → RRF；无 Key 自动降级 BM25 |
+| 性能 | 搜索/抓取 TTL 缓存（默认 24h）+ 并发抓取（默认 3，可设 1 退回串行）：同一问题二次运行实测 23.8s → 3.4s |
+| 写操作可靠性 | 写操作审计表 + 幂等键：同一运行里重复执行不会重复发邮件/重复写 Notion；失败允许重试 |
+| 交付物 | Markdown / Word（`.docx`）/ 打印 PDF / 报告阅读页 / 多轮报告 diff / 历史检索 / 成本看板 |
 
 更细的实现记录见 [开发文档/OPTIMIZATION.md](开发文档/OPTIMIZATION.md)，
 防编造/重试/编码/报告生成的细节见 [开发文档/质量与可靠性设计.md](开发文档/质量与可靠性设计.md)。
@@ -251,6 +282,9 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 | `AGENT_KB_DIR` / `AGENT_KB_INDEX` | 知识库目录（默认 `knowledge/`）/ 索引缓存（`data/kb_index.json`） |
 | `AGENT_LOG_DIR` / `AGENT_TRACE_DIR` | 日志与 trace 目录，默认 `logs` |
 | `AGENT_OUTBOX_DIR` | dry-run 输出目录，默认 `outbox` |
+| `AGENT_CACHE_ENABLED` / `AGENT_CACHE_TTL` | 搜索/抓取缓存开关（默认 1）/ TTL 秒数（默认 86400） |
+| `AGENT_FETCH_CONCURRENCY` | 并发抓取数，默认 3；设 1 完全退回串行 |
+| `AGENT_WRITE_IDEMPOTENT` / `AGENT_WRITE_AUDIT_DB` | 写操作幂等开关（默认 1）/ 审计库路径（默认 `data/write_audit.sqlite`） |
 
 <details>
 <summary>完整环境变量表（点击展开）</summary>
@@ -291,6 +325,9 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 | `AGENT_EMBEDDING_MODEL` | embedding 模型，默认 `text-embedding-3-small`；失败降级 BM25 |
 | `AGENT_EVIDENCE_CARDS` / `AGENT_EVIDENCE_CARDS_MAX` | 证据卡片化开关 / 上限 20 |
 | `AGENT_DRAFT_SECTIONS_MAX` / `AGENT_DRAFT_REVIEW` / `AGENT_DRAFT_MAX_REWRITE` | 分节数 3 / 校验开关 / 重写次数 1 |
+| `AGENT_CACHE_ENABLED` / `AGENT_CACHE_TTL` / `AGENT_CACHE_DB` | 缓存开关 1 / TTL 86400s / `data/cache.sqlite` |
+| `AGENT_FETCH_CONCURRENCY` | 并发抓取数，默认 3（夹取 1~6） |
+| `AGENT_WRITE_IDEMPOTENT` / `AGENT_WRITE_AUDIT_DB` | 写操作幂等 1 / `data/write_audit.sqlite` |
 
 </details>
 
@@ -305,16 +342,22 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 | --- | --- |
 | `POST /api/research` | 启动一次研究，返回第一次中断或最终结果（可带 `parent_thread_id`） |
 | `POST /api/resume` | 提交人工确认，返回下一次中断或最终结果 |
-| `POST /api/research/stream` / `POST /api/resume/stream` | 同上，NDJSON 流式：`start` → `log`… → `result` / `error` |
-| `GET /api/sessions?limit=20` | 历史会话列表 |
-| `GET /api/sessions/{thread_id}` | 加载单个会话（含中断载荷） |
+| `POST /api/research/stream` / `POST /api/resume/stream` | 同上，NDJSON 流式：`start` → `log`… → `result` / `error` / `cancelled` |
+| `GET /api/sessions?limit=20&q=&status=` | 历史会话列表（关键词匹配问题/会话号，可按状态筛选） |
+| `GET /api/sessions/{thread_id}` | 加载单个会话（含中断载荷、`parent_thread_id`） |
 | `DELETE /api/sessions/{thread_id}` | 删除会话（索引 + 该 thread 的 checkpoint/writes） |
 | `POST /api/sessions/{thread_id}/interrupt` | 把 `running` 会话标成 `interrupted` |
+| `POST /api/sessions/{thread_id}/cancel` | 请求取消运行（协作式：下一个节点边界生效） |
+| `GET /api/sessions/{thread_id}/diff` | 本轮报告与上一轮（parent）的正文差异 |
+| `GET /api/sessions/{thread_id}/export.docx` | 导出 Word（未装 `python-docx` 时 503） |
+| `GET /api/kb` / `POST /api/kb/reindex` | 知识库统计与文档列表 / 删除索引缓存并重建 |
 | `GET /api/health` | 健康检查、LLM 模式/模型、持久化方式 |
 | `GET /api/trace/{trace_id}` | 节点级调用链：耗时 / token / 成本 / 错误 |
 | `GET /api/cost/summary?days=7` | 按天/按模型聚合成本 |
 | `GET/POST/DELETE /api/config`、`POST /api/config/test` | 模型配置（掩码、测试连接、清除） |
-| 页面路由 | `/` 启动页、`/launch` 启动页、`/index.html` 主界面、`/app` 主界面 |
+| 页面路由 | `/` 启动页、`/launch` 启动页、`/index.html` 主界面、`/app` 主界面、`/report/<thread_id>` 报告阅读页 |
+
+> 流式终态：正常完成推 `result`，后端异常推 `error`，用户取消推 `cancelled`（会话状态记为 `cancelled`）。
 
 </details>
 
@@ -324,7 +367,7 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 ## 测试与验收
 
 ```bash
-pytest -q                              # 166 passed
+pytest -q                              # 226 passed
 python evaluation/acceptance_check.py  # 9/9（生成 FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ```
@@ -335,10 +378,10 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 
 | 位置 | 内容 |
 | --- | --- |
-| [原型图/](原型图/) | 15 张页面原型/界面截图（含索引） |
+| [原型图/](原型图/) | 22 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 24 个测试文件 / 171 用例 |
+| [tests/](tests/) | 36 个测试文件 / 226 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 
@@ -348,10 +391,14 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 - **写操作默认 dry-run**：未配置 SMTP/Notion 时只落盘 `.eml` / `.md`。
 - **检索质量是瓶颈**：真实评测子问题覆盖率 51.2%，主要卡在对比题只抓到一方、站点 403/JS 空页。
 - **规则代理指标**：覆盖率/支持率是词面与规则判断，不是语义蕴含，不能替代人工抽检。
-- **延迟**：分节写作 + 补检让单题约 15~30s（真实联网）；P95 约 26.7s。
-- **中断后只能重跑**：checkpoint 只保证人工审批点可恢复；普通节点执行中被杀只能重跑或删除会话。
+- **延迟**：首次单题约 15~30s（真实联网）；同一问题二次运行命中缓存可降到 ~3s。
+- **取消是协作式的**：只在节点边界生效（当前节点若在 HTTP 预算内，最迟约 15~20s 停下），不强杀线程。
+- **中断后只能重跑**：checkpoint 只保证人工审批点可恢复；进程在普通节点执行中被杀只能重跑或删除会话。
 - **真实 LLM 未全量评测**：40 题仍是离线 LLM + 真实联网；`glm-4-flash` 等免费模型成本真实为 0。
 - **知识库规模**：纯 Python 余弦，约 1 万 chunk 上限；embedding 需服务支持 `/embeddings`。
+- **Word 导出依赖可选包**：需要 `python-docx`（已写进 `requirements.txt`）；未安装时导出接口返回 503，其它功能不受影响。
+- **缓存/审计是运行产物**：`data/cache.sqlite`、`data/write_audit.sqlite` 会随使用增长，长期运行需要清理策略。
+- **报告 diff 只看正文**：不比较来源清单，且最多返回 200 行差异（超出会标记截断）。
 
 完整清单见 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) §9。
 

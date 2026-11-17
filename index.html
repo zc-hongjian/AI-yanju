@@ -1325,6 +1325,12 @@
   .kb-docs { max-height: 240px; overflow: auto; margin-top: 8px; }
   .kb-docs table { width: 100%; }
   .kb-docs td, .kb-docs th { padding: 5px 8px; font-size: 12px; }
+  .kb-docs td:first-child { word-break: break-all; }
+  .kb-docs td:nth-child(2) {
+    max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kb-docs td:nth-child(3), .kb-docs th:nth-child(3),
+  .kb-docs td:nth-child(4), .kb-docs th:nth-child(4) { white-space: nowrap; text-align: right; }
   @media (max-width: 560px) {
     .progress-head { flex-wrap: wrap; }
     .progress-head .cancel-btn { margin-left: 0; }

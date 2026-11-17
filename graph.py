@@ -668,15 +668,31 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
     existing = {str(page.get("url") or "") for page in pages}
     # 相关性门槛：知识库里有“研究助手自己的设计方案”这类项目内文档，
     # 只要问题没提到它们的关键词，就不该把片段塞进证据链（实测会污染引用与来源清单）。
-    terms: set[str] = set()
+    #
+    # 分两档判定：
+    # - strong（≥3 字中文 / ≥2 字符英文）出现在正文任意位置即可；
+    # - light（恰好 2 字中文，如「分块」「重叠」）只在标题/小节名里认，
+    #   避免「多少」「的是」这类二字虚词把无关片段放进来。
+    # 之前把 2 字词一刀切排除，导致「知识库分块的大小和重叠」这类问题命中了
+    # 「引用怎么处理 / 降级路径」，却把真正讲 800/120 的「分块策略」过滤掉（kb6 回归）。
+    strong: set[str] = set()
+    light: set[str] = set()
     for text in [question, *[str(item) for item in plan.get("sub_questions") or []]]:
         for term in coverage_terms(text):
-            if (term.isascii() and len(term) >= 2) or (not term.isascii() and len(term) >= 3):
-                terms.add(term)
+            if term.isascii():
+                if len(term) >= 2:
+                    strong.add(term)
+            elif len(term) >= 3:
+                strong.add(term)
+            elif len(term) == 2:
+                light.add(term)
     filtered: list[dict[str, Any]] = []
     for hit in hits:
         body = f"{hit.get('text') or ''} {hit.get('title') or ''} {hit.get('heading') or ''}".lower()
-        if not terms or any(term in body for term in terms):
+        heading = f"{hit.get('title') or ''} {hit.get('heading') or ''}".lower()
+        if not strong and not light:
+            filtered.append(hit)
+        elif any(term in body for term in strong) or any(term in heading for term in light):
             filtered.append(hit)
     dropped = len(hits) - len(filtered)
     hits = filtered

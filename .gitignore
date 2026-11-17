@@ -45,6 +45,8 @@ data/
 # ---------------------------------------------------------------------------
 evaluation/results/
 evaluation/logs/
+# 验收脚本在仓库根目录生成的报告（归档副本在 开发文档/FUNCTIONAL_ACCEPTANCE.md）
+/FUNCTIONAL_ACCEPTANCE.md
 
 # ---------------------------------------------------------------------------
 # 临时目录：CDP 截图脚本、pytest basetemp、Chrome profile、调试草稿

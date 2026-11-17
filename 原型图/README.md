@@ -1,6 +1,6 @@
 # 原型图（界面截图）
 
-本目录存放项目全部页面原型/界面截图，共 15 张。所有截图都来自真实运行的页面
+本目录存放项目全部页面原型/界面截图，共 22 张。所有截图都来自真实运行的页面
 （Chrome headless / CDP 驱动），不是设计稿。
 
 | 文件 | 页面 | 说明 |
@@ -13,12 +13,19 @@
 | [web-ui-progress.png](web-ui-progress.png) | 执行进度（展开） | 14 段节点进度条 + 阶段表情/文案 + 日志表 |
 | [web-ui-progress-collapsed.png](web-ui-progress-collapsed.png) | 执行进度（收起日志） | 只折叠日志表格，进度条与阶段文案保留 |
 | [web-ui-history.png](web-ui-history.png) | 历史会话抽屉 | 会话列表、状态、继续审批入口 |
+| [web-ui-history-search.png](web-ui-history-search.png) | 历史会话检索 | 关键词搜索（问题/会话号）+ 状态筛选 + 追问链 |
 | [web-ui-history-delete.png](web-ui-history-delete.png) | 历史会话删除 | 行内删除按钮、已中断状态标签 |
 | [web-ui-interrupted.png](web-ui-interrupted.png) | 执行中断态 | 后端被杀后进度冻结标红 + 「会话未完成」卡片 |
+| [web-ui-cancelled.png](web-ui-cancelled.png) | 主动取消运行 | 「已取消 · N%」冻结进度 + 会话未完成卡片 |
 | [web-ui-recover.png](web-ui-recover.png) | 断点恢复 | 服务重启后从待审批中断处继续 |
+| [web-ui-followup.png](web-ui-followup.png) | 多轮追问 | 输入框上方提示「基于上一轮结论追问」+ 换新问题 |
 | [web-ui-trace.png](web-ui-trace.png) | 调用链 Trace | 节点耗时瀑布 + 每节点 token/成本 |
+| [web-ui-cost.png](web-ui-cost.png) | 成本看板 | 近 7/30 天运行数、调用数、token、成本（按模型/按天） |
 | [web-ui-rag.png](web-ui-rag.png) | 知识库来源 | 知识库证据与统一 `[S#]` 引用 |
+| [web-ui-kb.png](web-ui-kb.png) | 知识库面板 | 文档/分块/向量开关 + 一键重建索引 |
 | [web-ui-settings.png](web-ui-settings.png) | 模型设置面板 | Key/Base URL/模型/提供方预设、测试连接 |
+| [web-ui-report.png](web-ui-report.png) | 报告阅读页 | 三栏（目录/正文/证据）+ 引用联动 + 打印 |
+| [web-ui-report-diff.png](web-ui-report-diff.png) | 多轮报告对比 | 报告页展开正文增删红绿差异 |
 | [web-ui-final-meta.png](web-ui-final-meta.png) | 最终结果元信息 | 长状态文本中文标签化，卡片不溢出 |
 
 > 说明：本目录的前身是仓库根目录的 `docs/`；为区分“页面原型”与“开发文档”，
