@@ -38,6 +38,27 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
+def ensure_utf8_stdout() -> bool:
+    """把 stdout 切到 UTF-8 编码。
+
+    背景：Windows 默认 GBK 控制台打印 ``¥`` 或 emoji 会抛 ``UnicodeEncodeError``，
+    而 ``finalize`` 正要打印含 ``¥`` 的报告摘要——一次正常的研究会因此被标成 failed。
+    这里只做尽力而为的切换：已是 UTF-8 / 不支持 reconfigure / 平台拒绝都静默返回。
+    """
+    stream = sys.stdout
+    encoding = (getattr(stream, "encoding", "") or "").lower()
+    if encoding and "utf" in encoding:
+        return True
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return False
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+        return True
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 # --------------------------------------------------------------- 实时日志订阅
 # Web 版用它在一次 HTTP 请求还没结束时就把日志推给前端（NDJSON 流式响应）。
 _LOG_SINKS: dict[str, list[Callable[[dict[str, Any]], None]]] = {}

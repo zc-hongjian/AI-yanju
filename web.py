@@ -77,7 +77,7 @@ try:
     from graph import build_graph
     from llm_client import LLMClient, get_llm
     import llm_client
-    from logging_utils import register_log_sink, unregister_log_sink
+    from logging_utils import ensure_utf8_stdout, register_log_sink, unregister_log_sink
     from persistence import (
         SessionStore,
         build_checkpointer,
@@ -92,6 +92,8 @@ except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟
 
 # 必须在创建图 / 第一次请求前加载 .env，否则 web 版会一直停留在离线模式
 load_dotenv(BASE_DIR / ".env")
+# GBK 控制台打印 ¥/emoji 会直接让一次运行崩掉（UnicodeEncodeError），先切 UTF-8
+ensure_utf8_stdout()
 
 # 页面运行时填写的 LLM 配置只保存在本进程内存（不写 .env、不返回给前端明文）。
 # 服务重启后回到 .env 的配置。

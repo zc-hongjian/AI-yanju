@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import threading
@@ -56,6 +58,10 @@ def checkpoint_db_path() -> Path:
 
 def sessions_db_path() -> Path:
     return _env_path("AGENT_SESSIONS_DB", "sessions.sqlite")
+
+
+def write_audit_db_path() -> Path:
+    return _env_path("AGENT_WRITE_AUDIT_DB", "write_audit.sqlite")
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -221,3 +227,170 @@ def delete_thread_data(
 
 
 _STORE: SessionStore | None = None
+
+
+# ============================================================================
+# 写操作审计 + 幂等
+# ============================================================================
+_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS write_actions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_key      TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    mode         TEXT NOT NULL DEFAULT '',
+    detail       TEXT NOT NULL DEFAULT '{}',
+    error        TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_write_actions_key
+    ON write_actions(run_key, action, payload_hash);
+"""
+
+
+def payload_hash(action: str, payload: dict[str, Any]) -> str:
+    """同一 (动作, 参数) 的稳定指纹；参数改过（换收件人/改正文）就是新的 key。"""
+    try:
+        canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        canonical = repr(payload)
+    return hashlib.sha1(f"{action}\n{canonical}".encode("utf-8", "replace")).hexdigest()
+
+
+class WriteAuditStore:
+    """写操作审计表：既记录“谁执行过什么”，也用来做幂等去重。
+
+    为什么需要它：``execute_actions`` 只在人工确认后调用一次，但如果进程在
+    “写成功”与“checkpoint 落盘”之间被杀，恢复时节点会重跑。没有幂等键就会
+    重复发邮件 / 重复写 Notion —— 这是真实存在的风险，不是理论问题。
+    """
+
+    def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
+        self.path = Path(db_path) if db_path else write_audit_db_path()
+        self._lock = threading.RLock()
+        self._conn = _connect(self.path)
+        with self._lock:
+            self._conn.executescript(_AUDIT_SCHEMA)
+            self._conn.commit()
+
+    def lookup(self, run_key: str, action: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """查这次运行里是否已经成功执行过同样的写操作；异常按“没记录”处理。"""
+        if not run_key:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT status, mode, detail, error FROM write_actions "
+                    "WHERE run_key = ? AND action = ? AND payload_hash = ?",
+                    (run_key, action, payload_hash(action, payload)),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        try:
+            detail = json.loads(row[2]) if row[2] else {}
+        except json.JSONDecodeError:
+            detail = {}
+        return {
+            "status": str(row[0]),
+            "ok": str(row[0]) == "ok",
+            "mode": str(row[1]),
+            "detail": detail,
+            "error": str(row[3]),
+        }
+
+    def record(
+        self,
+        run_key: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        ok: bool,
+        mode: str = "",
+        detail: dict[str, Any] | None = None,
+        error: str = "",
+    ) -> None:
+        """记一条审计（同一 key 成功过就不再覆盖成失败）；失败只降级不抛异常。"""
+        if not run_key:
+            return
+        now = _now()
+        try:
+            detail_text = json.dumps(detail or {}, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            detail_text = "{}"
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """
+                    INSERT INTO write_actions
+                        (run_key, action, payload_hash, status, mode, detail, error, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_key, action, payload_hash) DO UPDATE SET
+                        status = excluded.status,
+                        mode = excluded.mode,
+                        detail = excluded.detail,
+                        error = excluded.error,
+                        updated_at = excluded.updated_at
+                    WHERE write_actions.status <> 'ok'
+                    """,
+                    (
+                        run_key,
+                        action,
+                        payload_hash(action, payload),
+                        "ok" if ok else "failed",
+                        mode,
+                        detail_text,
+                        error[:500],
+                        now,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+        except sqlite3.Error:
+            # 审计失败不能影响已完成的写操作
+            return
+
+    def entries(self, run_key: str) -> list[dict[str, Any]]:
+        """某次运行的全部写操作记录（审计/测试用）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT action, status, mode, error, created_at FROM write_actions "
+                "WHERE run_key = ? ORDER BY id",
+                (run_key,),
+            ).fetchall()
+        return [
+            {"action": row[0], "status": row[1], "mode": row[2], "error": row[3], "created_at": row[4]}
+            for row in rows
+        ]
+
+
+_AUDIT: WriteAuditStore | None = None
+_AUDIT_LOCK = threading.Lock()
+
+
+def get_write_audit_store() -> WriteAuditStore | None:
+    """模块级单例；建库失败时返回 None（调用方直接跳过幂等/审计）。"""
+    global _AUDIT
+    with _AUDIT_LOCK:
+        if _AUDIT is None:
+            try:
+                _AUDIT = WriteAuditStore()
+            except (sqlite3.Error, OSError) as exc:
+                print(f"[研究助手] 写操作审计不可用（不影响研究流程）：{exc}", flush=True)
+                return None
+        return _AUDIT
+
+
+def reset_write_audit_store() -> None:
+    """测试用：丢掉单例，让下一次调用按当前环境变量重新建库。"""
+    global _AUDIT
+    with _AUDIT_LOCK:
+        _AUDIT = None
+
+
+def write_idempotent_enabled() -> bool:
+    raw = os.getenv("AGENT_WRITE_IDEMPOTENT", "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}

@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+import cache
 from llm_client import LLMError, get_llm
 from text_clean import clean_text, clean_text_blocks, decode_body, is_garbled, sanitize_invisible
 
@@ -308,6 +309,10 @@ def reset_provider_breakers() -> None:
 def _search_web_impl(query: Any, max_results: Any = 5) -> list[dict[str, Any]]:
     query = _require_text(query, "query", max_len=300)
     limit = _coerce_int(max_results, "max_results", default=5, lo=1, hi=10)
+    cache_key = f"{limit}|{' '.join(query.split())}"
+    cached = cache.get_value("search", cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
     budget = float(os.getenv("AGENT_SEARCH_TIMEOUT", "20"))
     deadline = time.monotonic() + budget
     failures: list[str] = []
@@ -329,7 +334,9 @@ def _search_web_impl(query: Any, max_results: Any = 5) -> list[dict[str, Any]]:
             _reset_provider_failure(name)
             for idx, hit in enumerate(hits):
                 hit.setdefault("score", round(max(0.5, 0.95 - idx * 0.05), 2))
-            return hits[:limit]
+            results = hits[:limit]
+            cache.put_value("search", cache_key, results)
+            return results
         failures.append(f"{name}: 无结果")
     raise ToolExecutionError("所有搜索提供方均失败：" + "；".join(failures))
 
@@ -592,6 +599,12 @@ def _fetch_with_safe_redirects(url: str, *, max_hops: int = 4) -> requests.Respo
 def _fetch_page_impl(url: Any) -> dict[str, Any]:
     url = _require_text(url, "url", max_len=2000)
     _assert_safe_url(url)
+    cache_key = cache.normalize_url(url)
+    cached = cache.get_value("fetch", cache_key)
+    if isinstance(cached, dict) and cached.get("content"):
+        hit = dict(cached)
+        hit["cached"] = True
+        return hit
     try:
         resp = _fetch_with_safe_redirects(url)
     except requests.exceptions.SSLError as exc:
@@ -644,7 +657,7 @@ def _fetch_page_impl(url: Any) -> dict[str, Any]:
         raise NonRetryableToolError(f"正文疑似乱码（已丢弃 {dropped_blocks} 个段落）")
     if len(content) < 120:
         raise NonRetryableToolError("正文提取失败（内容过短，可能是 JS 渲染页面或编码无法识别）")
-    return {
+    payload = {
         "url": url,
         "title": title[:200],
         "content": content,
@@ -652,6 +665,8 @@ def _fetch_page_impl(url: Any) -> dict[str, Any]:
         "encoding": encoding,
         "dropped_blocks": dropped_blocks,
     }
+    cache.put_value("fetch", cache_key, payload)
+    return payload
 
 
 def _summarize_sources_impl(sources: Any, research_question: Any) -> dict[str, Any]:

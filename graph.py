@@ -21,6 +21,7 @@ import inspect
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +40,7 @@ import tools
 import tracing
 from llm_client import get_llm
 from logging_utils import StepLog, log_stats, now_iso, summarize_text
+from persistence import get_write_audit_store, write_idempotent_enabled
 from quality import compute_coverage, coverage_terms, gap_queries_for, verify_evidence
 from state import ResearchState
 
@@ -429,6 +431,29 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
 
 
 # ================================================================ 节点 4：抓正文
+def _fetch_concurrency() -> int:
+    """并发抓取页数：默认 3；设 1 可完全退回串行行为（对比/排障用）。"""
+    try:
+        value = int(os.getenv("AGENT_FETCH_CONCURRENCY", "3"))
+    except ValueError:
+        value = 3
+    return max(1, min(value, 6))
+
+
+def _fetch_batch(batch: list[dict[str, Any]], workers: int) -> list[Any]:
+    """并发抓一批 URL，返回值顺序与 batch 一致。
+
+    耗时几乎都在 HTTP 等待上，所以用线程池；结果按提交顺序收集，
+    保证上层“按排名归并”的逻辑与串行版完全一致。
+    """
+    urls = [item["url"] for item in batch]
+    if workers <= 1 or len(urls) == 1:
+        return [tools.call_tool("fetch_page", {"url": url}) for url in urls]
+    with ThreadPoolExecutor(max_workers=min(workers, len(urls))) as pool:
+        futures = [pool.submit(tools.call_tool, "fetch_page", {"url": url}) for url in urls]
+        return [future.result() for future in futures]
+
+
 def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     sl = StepLog(state)
     existing_pages = list(state.get("fetched_pages") or [])
@@ -464,7 +489,9 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     failed_hosts: set[str] = set()
     skipped_same_host = 0
     skipped_duplicate = 0
-    for hit in candidates:
+    concurrency = _fetch_concurrency()
+    cursor = 0
+    while cursor < len(candidates):
         if len(pages) >= page_target:
             break
         if attempts >= max_attempts:
@@ -473,73 +500,93 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
         if time.perf_counter() - started > fetch_budget:
             stop_reason = f"抓取总耗时超过 {fetch_budget:.0f}s，提前结束"
             break
-        url = str(hit.get("url") or "").strip()
-        if not url:
+        # 按排名取一批候选并发抓；批内失败的同域候选无法撤回（已在飞），
+        # 但最终页面集合仍按排名顺序归并，所以结果与串行版一致。
+        batch: list[dict[str, Any]] = []
+        while cursor < len(candidates) and len(batch) < concurrency:
+            hit = candidates[cursor]
+            cursor += 1
+            url = str(hit.get("url") or "").strip()
+            if not url:
+                continue
+            host = (urlparse(url).hostname or "").lower()
+            if host and host in failed_hosts:
+                # 同一域名第一次已经失败（403 / SSL / JS 空页），后续同域候选直接跳过，
+                # 把有限的抓取次数留给其他域名。
+                skipped_same_host += 1
+                continue
+            batch.append({"url": url, "host": host, "title": str(hit.get("title") or "")})
+            if attempts + len(batch) >= max_attempts:
+                break
+        if not batch:
             continue
-        host = (urlparse(url).hostname or "").lower()
-        if host and host in failed_hosts:
-            # 同一域名第一次已经失败（403 / SSL / JS 空页），后续同域候选直接跳过，
-            # 把有限的抓取次数留给其他域名。
-            skipped_same_host += 1
-            continue
-        attempts += 1
-        result = tools.call_tool("fetch_page", {"url": url})
-        retry_counts["fetch_page"] = retry_counts.get("fetch_page", 0) + max(0, result.attempts - 1)
-        if result.ok:
-            page = dict(result.data or {})
-            page["search_title"] = str(hit.get("title") or "")
-            fingerprint = _content_fingerprint(str(page.get("content") or ""))
-            if fingerprint and fingerprint in seen_fingerprints:
-                skipped_duplicate += 1
+        attempts += len(batch)
+        batch_results = _fetch_batch(batch, concurrency)
+        for item, result in zip(batch, batch_results):
+            retry_counts["fetch_page"] = retry_counts.get("fetch_page", 0) + max(0, result.attempts - 1)
+            if len(pages) >= page_target:
+                # 并发批可能多抓了几个：按排名丢弃超出目标的，不再写成功日志
+                continue
+            url = item["url"]
+            host = item["host"]
+            if result.ok:
+                page = dict(result.data or {})
+                page["search_title"] = item["title"]
+                fingerprint = _content_fingerprint(str(page.get("content") or ""))
+                if fingerprint and fingerprint in seen_fingerprints:
+                    skipped_duplicate += 1
+                    sl.add(
+                        node_name="fetch_pages",
+                        tool_name="fetch_page",
+                        input_summary=url,
+                        output_summary="正文与已抓取页面重复（转载/镜像），跳过",
+                        status="skipped",
+                        retry_count=max(0, result.attempts - 1),
+                        latency_ms=result.latency_ms,
+                    )
+                    continue
+                if fingerprint:
+                    seen_fingerprints.add(fingerprint)
+                pages.append(page)
+                encoding = str(page.get("encoding") or "未知")
+                dropped_blocks = int(page.get("dropped_blocks") or 0)
+                if page.get("cached"):
+                    detail = f"命中缓存：正文 {page.get('chars', 0)} 字符（本次无需联网）"
+                else:
+                    detail = f"抓到正文 {page.get('chars', 0)} 字符（编码 {encoding}"
+                    detail += f"，丢弃乱码 {dropped_blocks} 段）" if dropped_blocks else "）"
                 sl.add(
                     node_name="fetch_pages",
                     tool_name="fetch_page",
                     input_summary=url,
-                    output_summary="正文与已抓取页面重复（转载/镜像），跳过",
-                    status="skipped",
+                    output_summary=detail,
+                    status="ok",
                     retry_count=max(0, result.attempts - 1),
                     latency_ms=result.latency_ms,
                 )
-                continue
-            if fingerprint:
-                seen_fingerprints.add(fingerprint)
-            pages.append(page)
-            encoding = str(page.get("encoding") or "未知")
-            dropped_blocks = int(page.get("dropped_blocks") or 0)
-            detail = f"抓到正文 {page.get('chars', 0)} 字符（编码 {encoding}"
-            detail += f"，丢弃乱码 {dropped_blocks} 段）" if dropped_blocks else "）"
-            sl.add(
-                node_name="fetch_pages",
-                tool_name="fetch_page",
-                input_summary=url,
-                output_summary=detail,
-                status="ok",
-                retry_count=max(0, result.attempts - 1),
-                latency_ms=result.latency_ms,
-            )
-        else:
-            if host:
-                failed_hosts.add(host)
-            errors.append(
-                {
-                    "node": "fetch_pages",
-                    "tool": "fetch_page",
-                    "type": "tool_error",
-                    "error": result.error or "未知错误",
-                    "url": url,
-                    "attempts": result.attempts,
-                }
-            )
-            sl.add(
-                node_name="fetch_pages",
-                tool_name="fetch_page",
-                input_summary=url,
-                output_summary=result.summary(),
-                status="error",
-                retry_count=max(0, result.attempts - 1),
-                latency_ms=result.latency_ms,
-                error=result.error,
-            )
+            else:
+                if host:
+                    failed_hosts.add(host)
+                errors.append(
+                    {
+                        "node": "fetch_pages",
+                        "tool": "fetch_page",
+                        "type": "tool_error",
+                        "error": result.error or "未知错误",
+                        "url": url,
+                        "attempts": result.attempts,
+                    }
+                )
+                sl.add(
+                    node_name="fetch_pages",
+                    tool_name="fetch_page",
+                    input_summary=url,
+                    output_summary=result.summary(),
+                    status="error",
+                    retry_count=max(0, result.attempts - 1),
+                    latency_ms=result.latency_ms,
+                    error=result.error,
+                )
     if stop_reason:
         errors.append({"node": "fetch_pages", "type": "budget_exceeded", "error": stop_reason})
         sl.add(
@@ -1384,6 +1431,8 @@ def execute_actions(state: ResearchState) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     errors = list(state.get("errors") or [])
     retry_counts = dict(state.get("retry_counts") or {})
+    run_key = str(state.get("trace_id") or "")
+    audit = get_write_audit_store() if write_idempotent_enabled() else None
     for action in state.get("approved_actions") or []:
         payload: dict[str, Any] = {}
         if action == "send_email":
@@ -1398,10 +1447,45 @@ def execute_actions(state: ResearchState) -> dict[str, Any]:
             }
         else:
             continue
+        if audit is not None:
+            previous = audit.lookup(run_key, action, payload)
+            if previous and previous.get("ok"):
+                # 幂等：同一运行里同样参数已经写成功过（进程在落盘前被杀后重跑会走到这里），
+                # 再发一次邮件/再写一次 Notion 是真实伤害，所以直接复用上次结果。
+                results.append(
+                    {
+                        "action": action,
+                        "ok": True,
+                        "status": "ok",
+                        "mode": str(previous.get("mode") or ""),
+                        "detail": previous.get("detail") or {},
+                        "error": "",
+                        "attempts": 0,
+                        "deduplicated": True,
+                    }
+                )
+                sl.add(
+                    node_name="execute_actions",
+                    tool_name=action,
+                    input_summary=f"{action}（幂等检查）",
+                    output_summary="此前已成功执行过相同操作，本次跳过，避免重复发送/写入",
+                    status="skipped",
+                )
+                continue
         # 关键：human_approved=True 只在这里出现，且仅对已人工确认的动作调用。
         result = tools.call_tool(action, payload, human_approved=True)
         retry_counts[action] = retry_counts.get(action, 0) + max(0, result.attempts - 1)
         data = result.data if isinstance(result.data, dict) else {}
+        if audit is not None:
+            audit.record(
+                run_key,
+                action,
+                payload,
+                ok=result.ok,
+                mode=str(data.get("mode") or ""),
+                detail=data,
+                error=result.error or "",
+            )
         record = {
             "action": action,
             "ok": result.ok,

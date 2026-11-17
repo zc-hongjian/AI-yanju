@@ -17,7 +17,7 @@ from langgraph.types import Command
 
 from graph import build_graph, render_final_output
 from human_review import build_resume
-from logging_utils import render_log_summary
+from logging_utils import ensure_utf8_stdout, render_log_summary
 from persistence import build_checkpointer
 from state import new_state
 
@@ -39,6 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
+    ensure_utf8_stdout()
     args = parse_args(argv)
 
     question = (args.question or "").strip()

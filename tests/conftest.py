@@ -36,6 +36,12 @@ _EMPTY_KB.mkdir(parents=True, exist_ok=True)
 os.environ["AGENT_KB_DIR"] = str(_EMPTY_KB)
 os.environ["AGENT_KB_INDEX"] = str(_TEST_DATA_DIR / "kb_index.json")
 
+# 缓存默认关闭：既有用例断言的是“每次真的调用工具”，不能命中缓存被短路；
+# 缓存/审计的库也都放临时目录，避免测试把 data/ 写脏。
+os.environ["AGENT_CACHE_ENABLED"] = "0"
+os.environ["AGENT_CACHE_DB"] = str(_TEST_DATA_DIR / "cache.sqlite")
+os.environ["AGENT_WRITE_AUDIT_DB"] = str(_TEST_DATA_DIR / "write_audit.sqlite")
+
 import llm_client  # noqa: E402
 import tools  # noqa: E402
 
