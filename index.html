@@ -1394,53 +1394,6 @@
     .cost-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cost-day { grid-template-columns: 82px minmax(70px, 1fr) 118px; }
   }
-
-  /* ============================================================
-     P6 鼠标聚光灯：卡片跟着指针走的柔光斑
-     1) JS 只把鼠标坐标写进 --spot-x / --spot-y（默认居中），
-        光斑全部由 CSS radial-gradient 画，不引入动画库；
-     2) ::after 用 inset:0 + pointer-events:none，纯覆盖层，
-        不参与布局，也不挡文字与按钮的点击；
-     3) 指针离开卡片时移除 .is-lit，靠 opacity 过渡淡出。
-     ============================================================ */
-  .card, .feature, .report-body {
-    position: relative;
-    --spot-x: 50%;
-    --spot-y: 50%;
-  }
-  .card::after, .feature::after, .report-body::after {
-    content: "";
-    position: absolute; inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity .3s ease;
-    /* 两层同心圆：内层是贴着指针的亮核，外层是青→紫的柔光晕，
-       合起来才有「聚光灯打上去」的观感，同时峰值透明度仍很低 */
-    background:
-      radial-gradient(
-        circle clamp(60px, 7vw, 110px) at var(--spot-x) var(--spot-y),
-        rgba(125, 211, 252, .18),
-        rgba(56, 189, 248, .10) 55%,
-        transparent 78%
-      ),
-      radial-gradient(
-        circle clamp(150px, 20vw, 300px) at var(--spot-x) var(--spot-y),
-        rgba(56, 189, 248, .09),
-        rgba(139, 92, 246, .06) 45%,
-        transparent 74%
-      );
-  }
-  .card.is-lit::after,
-  .feature.is-lit::after,
-  .report-body.is-lit::after { opacity: 1; }
-  @media (prefers-reduced-motion: reduce) {
-    .card::after, .feature::after, .report-body::after { transition: none; }
-  }
-  /* 打印/导出 PDF 时不要这层光斑，免得指针恰好停在卡上把柔光印进纸面 */
-  @media print {
-    .card::after, .feature::after, .report-body::after { display: none !important; }
-  }
 </style>
 </head>
 <body>
@@ -4017,63 +3970,6 @@
   if (reportThreadId) {
     bindReportTools();
   }
-
-  // 鼠标聚光灯：把指针坐标写进卡片的 --spot-x / --spot-y，光斑由 CSS 渐变画。
-  // 只在精确指针设备（鼠标）上启用；高频 pointermove 用一次 rAF 合并，避免每帧多次重绘。
-  (function bindCardSpotlight() {
-    const SPOT_TARGET = ".card, .feature, .report-body";
-    const finePointer = window.matchMedia
-      && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-    if (!finePointer) return;
-
-    let node = null;      // 当前发光的卡片
-    let frame = 0;        // rAF 句柄
-    let cx = 0, cy = 0;   // 指针视口坐标
-    let box = null;       // 卡片视口矩形，进入卡片/滚动时刷新一次
-
-    function paint() {
-      frame = 0;
-      if (!node || !box) return;
-      node.style.setProperty("--spot-x", (cx - box.left) + "px");
-      node.style.setProperty("--spot-y", (cy - box.top) + "px");
-    }
-    function schedule() {
-      if (!frame) frame = requestAnimationFrame(paint);
-    }
-    function sync() {
-      if (!node) return;
-      box = node.getBoundingClientRect();
-      schedule();
-    }
-
-    document.addEventListener("pointermove", (event) => {
-      if (event.pointerType && event.pointerType !== "mouse") return;
-      cx = event.clientX;
-      cy = event.clientY;
-      const target = event.target && event.target.closest
-        ? event.target.closest(SPOT_TARGET)
-        : null;
-      if (target === node) { schedule(); return; }
-      if (node) node.classList.remove("is-lit");
-      node = target;
-      if (!node) return;              // 移到卡片外：淡出
-      box = node.getBoundingClientRect();
-      paint();                        // 先定位再亮起，避免光斑从旧位置跳过来
-      node.classList.add("is-lit");
-    }, { passive: true });
-
-    // 滚动/缩放时卡片位置变了，按最后一次指针位置重新算相对坐标
-    window.addEventListener("scroll", sync, { passive: true });
-    window.addEventListener("resize", sync);
-    // 指针移出窗口或页面失焦：收掉光斑
-    const dim = () => {
-      if (node) node.classList.remove("is-lit");
-      node = null;
-      box = null;
-    };
-    document.documentElement.addEventListener("pointerleave", dim);
-    window.addEventListener("blur", dim);
-  })();
 
   // 页面加载时显示 LLM 模式；file:// 或后端不可用时自动进入静态演示模式
   // 可选参数：?q=研究问题 预填问题；?autostart=1 自动开始；?collapse=1 执行进度默认收起（深链/截图用）
