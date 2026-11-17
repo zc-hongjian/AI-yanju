@@ -73,6 +73,7 @@ try:
 
     from dotenv import load_dotenv
 
+    import cancel
     from graph import build_graph
     from llm_client import LLMClient, get_llm
     import llm_client
@@ -84,6 +85,7 @@ try:
         delete_thread_data,
     )
     from state import new_state
+    import rag
     import tracing
 except ModuleNotFoundError as exc:  # 依赖没装（最常见：用错了虚拟环境）
     _bootstrap_dependency(exc)
@@ -389,6 +391,10 @@ def _stream_events(
     def worker() -> None:
         try:
             outcome["result"] = runner()
+        except cancel.ResearchCancelled:
+            # 主动取消：不是失败，也不是“连接中断”；用独立终态告诉前端
+            outcome["cancelled"] = True
+            _session_set_status(thread_id, "cancelled")
         except Exception as exc:  # noqa: BLE001 - 转成流里的 error 事件
             outcome["error"] = f"{type(exc).__name__}: {exc}"
             _session_set_status(thread_id, "failed")
@@ -410,13 +416,19 @@ def _stream_events(
                 break
             yield json.dumps(event, ensure_ascii=False) + "\n"
         completed = True
-        if "error" in outcome:
+        if outcome.get("cancelled"):
+            yield json.dumps(
+                {"type": "cancelled", "thread_id": thread_id},
+                ensure_ascii=False,
+            ) + "\n"
+        elif "error" in outcome:
             yield json.dumps({"type": "error", "message": outcome["error"]}, ensure_ascii=False) + "\n"
         else:
             payload = _pack(thread_id, outcome["result"])
             yield json.dumps({"type": "result", "data": payload}, ensure_ascii=False) + "\n"
     finally:
         unregister_log_sink(trace_id, sink)
+        cancel.clear(trace_id)
         if not completed:
             # 浏览器断开 / 进程被中断：会话不能一直显示“进行中”
             _session_set_status(thread_id, "interrupted")
@@ -546,6 +558,28 @@ def mark_session_interrupted(thread_id: str) -> dict[str, Any]:
     return {"ok": True, "thread_id": tid, "status": str(updated.get("status") or "")}
 
 
+@app.post("/api/sessions/{thread_id}/cancel")
+def cancel_session(thread_id: str) -> dict[str, Any]:
+    """请求取消正在运行的研究。
+
+    只登记取消标志，由 ``graph._instrument`` 在下一个节点边界生效；
+    接口立刻返回 ``cancelling``，前端应展示「正在取消…」而不是直接当成已停止。
+    """
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    row = _session_get(tid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if str(row.get("status") or "") != "running":
+        raise HTTPException(status_code=409, detail="当前没有运行中的任务")
+    trace = _trace_for(tid)
+    if not trace:
+        raise HTTPException(status_code=409, detail="找不到该会话的运行标识，无法取消")
+    cancel.request(trace)
+    return {"ok": True, "thread_id": tid, "status": "cancelling"}
+
+
 @app.delete("/api/sessions/{thread_id}")
 def delete_session(thread_id: str) -> dict[str, Any]:
     """删除单条历史会话：会话索引 + 该 thread 的 checkpoint/writes。
@@ -585,6 +619,49 @@ def get_trace(trace_id: str) -> dict[str, Any]:
 def get_cost_summary(days: int = 7) -> dict[str, Any]:
     """按天/按模型聚合 trace 成本（数据来自 logs/*.trace.jsonl）。"""
     return tracing.aggregate_costs(days)
+
+
+def _kb_payload() -> dict[str, Any]:
+    """知识库面板的统一返回：统计 + 文档列表 + 索引文件状态。"""
+    # 先让 stats 触发（必要时）索引构建，再统计索引文件状态，否则重建后仍会显示“未缓存”
+    stats = {**rag.knowledge_stats(), "top_k": rag.TOP_K}
+    index_path = rag.index_path()
+    exists = index_path.exists()
+    mtime = 0
+    if exists:
+        try:
+            mtime = int(index_path.stat().st_mtime)
+        except OSError:
+            mtime = 0
+    return {
+        "ok": True,
+        "stats": stats,
+        "documents": rag.knowledge_documents(),
+        "index": {"path": str(index_path), "exists": exists, "mtime": mtime},
+    }
+
+
+@app.get("/api/kb")
+def get_kb() -> dict[str, Any]:
+    """知识库（RAG）现状：文档数/分块数/是否启用向量/索引文件。"""
+    return _kb_payload()
+
+
+@app.post("/api/kb/reindex")
+def reindex_kb() -> dict[str, Any]:
+    """删除索引缓存并重建：改了 knowledge/ 里的文档后用它立即生效。"""
+    path = rag.index_path()
+    removed = False
+    try:
+        if path.exists():
+            path.unlink()
+            removed = True
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"删除知识库索引失败：{exc}") from exc
+    rag.reset_knowledge_base()
+    payload = _kb_payload()
+    payload["removed_index"] = removed
+    return payload
 
 
 @app.get("/api/config")
@@ -631,9 +708,14 @@ def start_research(req: ResearchRequest) -> dict[str, Any]:
     trace_id, thread_id, state, config = _start_run(question, req.parent_thread_id)
     try:
         result = GRAPH.invoke(state, config)
+    except cancel.ResearchCancelled as exc:
+        _session_set_status(thread_id, "cancelled")
+        raise HTTPException(status_code=409, detail="已取消本次研究") from exc
     except Exception as exc:  # noqa: BLE001 - 接口层统一转成 500，前端展示
         _session_set_status(thread_id, "failed")
         raise HTTPException(status_code=500, detail=f"研究流程失败：{exc}") from exc
+    finally:
+        cancel.clear(trace_id)
     return _pack(thread_id, result)
 
 
@@ -655,11 +737,18 @@ def resume(req: ResumeRequest) -> dict[str, Any]:
     if not thread_id:
         raise HTTPException(status_code=400, detail="缺少 thread_id")
     config = {"configurable": {"thread_id": thread_id}}
+    run_trace = _trace_for(thread_id)
     try:
         result = GRAPH.invoke(Command(resume=req.value), config)
+    except cancel.ResearchCancelled as exc:
+        _session_set_status(thread_id, "cancelled")
+        raise HTTPException(status_code=409, detail="已取消本次研究") from exc
     except Exception as exc:  # noqa: BLE001
         _session_set_status(thread_id, "failed")
         raise HTTPException(status_code=500, detail=f"恢复执行失败：{exc}") from exc
+    finally:
+        if run_trace:
+            cancel.clear(run_trace)
     return _pack(thread_id, result)
 
 

@@ -31,6 +31,7 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+import cancel
 import prompts
 import rag
 import reporting
@@ -139,16 +140,22 @@ def _instrument(name: str, fn: Any) -> Any:
     - 不改变节点语义：返回的 partial update 原样透传，只额外带 ``node_usage``；
     - 遇到 ``interrupt()`` 抛出的 GraphBubbleUp 直接放行（暂停中的节点不记 span，
       恢复时节点会重跑，避免同一次中断产生两条互相矛盾的记录）；
+    - 用户取消（``cancel.ResearchCancelled``）同样放行：取消不是错误，不能污染 trace；
     - 节点抛普通异常时先记 error span 再抛出，保证 trace 里能看到失败位置。
     """
 
     def wrapped(state: ResearchState) -> dict[str, Any]:
+        # 取消只在节点边界生效：正在执行的节点会跑完，避免半写 checkpoint。
+        if cancel.is_cancelled(str(state.get("trace_id") or "")):
+            raise cancel.ResearchCancelled(f"用户取消了运行（节点 {name} 未执行）")
         llm = get_llm()
         before = _llm_usage(llm)
         start = time.perf_counter()
         try:
             out = fn(state) or {}
         except GraphBubbleUp:
+            raise
+        except cancel.ResearchCancelled:
             raise
         except Exception as exc:  # noqa: BLE001 - 记录后原样抛出，由 LangGraph 处理
             _trace_recorder(state).add_span(

@@ -416,6 +416,42 @@ def knowledge_stats() -> dict[str, Any]:
     return get_knowledge_base().stats()
 
 
+def knowledge_documents(root: Path | None = None) -> list[dict[str, Any]]:
+    """列出知识库文档（路径/标题/分块数/大小/修改时间），供网页管理面板展示。
+
+    这里直接读盘而不是复用 KnowledgeBase 单例：面板要的是“当前目录的真实内容”，
+    即使索引缓存是旧的、或 embedding 不可用，也必须能如实列出文件。
+    """
+    base = Path(root) if root else kb_dir()
+    if not base.exists():
+        return []
+    chunks_by_doc: dict[str, int] = {}
+    titles: dict[str, str] = {}
+    for chunk in load_chunks(base):
+        chunks_by_doc[chunk.doc_id] = chunks_by_doc.get(chunk.doc_id, 0) + 1
+        titles.setdefault(chunk.doc_id, chunk.title)
+    documents: list[dict[str, Any]] = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+            continue
+        relative = path.relative_to(base).as_posix()
+        try:
+            stat = path.stat()
+            size, mtime = stat.st_size, int(stat.st_mtime)
+        except OSError:
+            size, mtime = 0, 0
+        documents.append(
+            {
+                "path": relative,
+                "title": titles.get(relative) or path.stem,
+                "chunks": chunks_by_doc.get(relative, 0),
+                "size": size,
+                "mtime": mtime,
+            }
+        )
+    return documents
+
+
 def doc_fingerprint(path: Path) -> str:
     try:
         return hashlib.md5(path.read_bytes()).hexdigest()[:12]

@@ -1292,6 +1292,45 @@
     }
     .report-body pre, .report-body table { page-break-inside: avoid; }
   }
+
+  /* ---------- P5 功能层：取消运行 / 多轮追问 / 知识库面板 ---------- */
+  .progress-head .cancel-btn { margin-left: auto; }
+  .progress-head .collapse-btn { margin-left: 0; }
+  .cancel-btn {
+    background: rgba(248, 113, 113, .10); color: #fca5a5;
+    border-color: rgba(248, 113, 113, .32);
+  }
+  .cancel-btn:hover:not(:disabled) {
+    color: #fee2e2; border-color: rgba(248, 113, 113, .6); background: rgba(248, 113, 113, .18);
+  }
+  .cancel-btn:disabled { opacity: .62; cursor: progress; }
+  .follow-hint {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin: 10px 0 0; padding: 8px 12px; border-radius: 12px;
+    background: rgba(34, 211, 238, .07); border: 1px solid rgba(34, 211, 238, .22);
+    color: #9fd8e6; font-size: 12.5px;
+  }
+  .follow-hint[hidden] { display: none; }
+  .link-btn {
+    margin-left: auto; background: none; border: 0; padding: 0;
+    color: #7dd3fc; font-size: 12.5px; cursor: pointer; text-decoration: underline;
+  }
+  .link-btn:hover { color: #e0f2fe; }
+  .kb-panel {
+    margin-top: 18px; padding: 14px; border-radius: 14px;
+    background: rgba(148, 163, 184, .05); border: 1px solid rgba(148, 163, 184, .14);
+  }
+  .kb-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .kb-head h3 { margin: 0; font-size: 14px; color: #dbeafe; }
+  .kb-docs { max-height: 240px; overflow: auto; margin-top: 8px; }
+  .kb-docs table { width: 100%; }
+  .kb-docs td, .kb-docs th { padding: 5px 8px; font-size: 12px; }
+  @media (max-width: 560px) {
+    .progress-head { flex-wrap: wrap; }
+    .progress-head .cancel-btn { margin-left: 0; }
+    .follow-hint { align-items: flex-start; }
+    .link-btn { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -1368,6 +1407,11 @@
       </div>
       <button id="start-btn" class="btn primary start-btn">开始研究</button>
     </div>
+    <p class="follow-hint" id="follow-hint" hidden>
+      <span aria-hidden="true">↳</span>
+      <span id="follow-hint-text">基于上一轮结论追问</span>
+      <button type="button" class="link-btn" id="follow-clear">换新问题</button>
+    </p>
     <div class="examples" id="examples">
       <button type="button" class="example" data-q="LangGraph 如何实现人工中断（human-in-the-loop）？">LangGraph 人工中断怎么实现</button>
       <button type="button" class="example" data-q="对比 LangGraph 与 AutoGen 在 human-in-the-loop 上的设计差异">LangGraph vs AutoGen 人工介入</button>
@@ -1427,6 +1471,7 @@
       <span class="card-ico" aria-hidden="true">🧭</span>
       <h2>执行进度</h2>
       <span class="muted" id="progress-text">处理中…</span>
+      <button type="button" class="collapse-btn cancel-btn" id="cancel-btn" hidden>取消运行</button>
       <button type="button" class="collapse-btn" id="progress-toggle" aria-expanded="true" aria-controls="progress-log">
         <span id="progress-toggle-text">收起</span><span class="chev" aria-hidden="true">▾</span>
       </button>
@@ -1539,6 +1584,7 @@
     </details>
     <div class="actions">
       <button class="btn primary" id="download-report">下载 Markdown 报告</button>
+      <button class="btn ghost" id="follow-up" type="button" hidden>继续追问</button>
       <button class="btn ghost" id="open-report" type="button" hidden>阅读报告页</button>
       <button class="btn ghost" id="restart-btn">开始新的研究</button>
     </div>
@@ -1578,6 +1624,8 @@
           <button type="button" data-size="m" class="active" title="中号字">A</button>
           <button type="button" data-size="l" title="大号字">A</button>
         </div>
+        <button class="btn ghost" id="report-follow" type="button" hidden>继续追问</button>
+        <button class="btn ghost" id="report-word" type="button" hidden>下载 Word</button>
         <button class="btn ghost" id="report-copy" type="button">复制链接</button>
         <button class="btn ghost" id="report-print" type="button">打印 / PDF</button>
         <button class="btn primary" id="report-download" type="button">下载 MD</button>
@@ -1656,6 +1704,15 @@
         placeholder="deepseek-chat">
     </div>
 
+    <section class="kb-panel" id="kb-panel">
+      <div class="kb-head">
+        <h3>知识库（RAG）</h3>
+        <button class="btn ghost" id="kb-reindex" type="button">重建索引</button>
+      </div>
+      <p class="hint" id="kb-stats">正在读取知识库…</p>
+      <div class="kb-docs" id="kb-docs"></div>
+    </section>
+
     <div id="config-msg" class="config-msg" hidden></div>
 
     <div class="modal-actions">
@@ -1700,16 +1757,21 @@
   let currentFinal = null;
   let sessionQuestion = "";   // 当前加载/创建的会话问题（删除确认时展示）
   let confirmResolver = null; // 确认弹层的 Promise resolver
+  let parentThread = null;    // 多轮追问：上一轮会话 id（发给后端 parent_thread_id）
+  let runAbort = null;        // 运行中的 AbortController（取消按钮用）
+  let cancelRequested = false;// 用户主动取消：区分“取消”与“断网/后端挂了”
 
   const STATUS_TEXT = {
     completed: "完成",
     completed_no_sources: "完成（无可靠来源）",
     completed_with_action_failure: "完成（写操作失败）",
     terminated_by_user: "已由用户终止",
+    cancelled: "已取消",
   };
   const STATUS_CLASS = {
     ok: "ok", degraded: "degraded", error: "error", rejected: "rejected",
     skipped: "skipped", approved: "approved", revise: "approved", terminated: "error",
+    cancelled: "skipped",
   };
   // 节点中文名：日志/进度里直接显示，避免用户看到 receive_question 这种内部标识
   const NODE_LABELS = {
@@ -1760,6 +1822,7 @@
   let progressMaxIndex = -1;       // 已到达的最远节点下标（只增不减，补检回环不倒退）
   let progressFailed = false;      // 本次运行是否失败（进度条文案要显示“失败”）
   let progressInterrupted = false; // 后端退出/断网：进度冻结 + 红色中断标记
+  let progressCancelled = false;   // 用户主动取消：进度冻结，文案是“已取消”而不是“已中断”
   let progressCollapsed = false;   // 手动收起状态（默认展开）
   let logHideTimer = null;         // 收起动画结束后再隐藏日志的计时器
   let progressState = { node: "", steps: 0, percent: 0 };
@@ -1784,27 +1847,34 @@
       let cls = "seg-cell";
       if (i < progressMaxIndex || done) cls += " done";
       else if (i === progressMaxIndex) cls += " active";
-      if (progressInterrupted && i === progressMaxIndex) cls = "seg-cell interrupted";
+      if ((progressInterrupted || progressCancelled) && i === progressMaxIndex) cls = "seg-cell interrupted";
       if (cells[i].className !== cls) cells[i].className = cls;
     }
-    const stage = progressInterrupted
-      ? ["⚠️", "连接中断：后端可能已退出，进度停在 " + (progressState.percent || 0) + "%"]
-      : (STAGE_FUN[progressState.node] || ["⏳", "准备开工…"]);
+    const stage = progressCancelled
+      ? ["🛑", "已取消：进度停在 " + (progressState.percent || 0) + "%，可以重新开始"]
+      : (progressInterrupted
+        ? ["⚠️", "连接中断：后端可能已退出，进度停在 " + (progressState.percent || 0) + "%"]
+        : (STAGE_FUN[progressState.node] || ["⏳", "准备开工…"]));
     $("stage-emoji").textContent = stage[0];
     $("stage-copy").textContent = stage[1];
     $("stage-percent").textContent = progressState.percent + "%";
     const step = Math.max(0, progressMaxIndex + 1);
-    $("seg-meta").textContent = progressInterrupted
-      ? "已中断 · 第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
-      : (step
-        ? "第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
-        : "等待开始 · 共 0 条日志");
+    $("seg-meta").textContent = progressCancelled
+      ? "已取消 · 第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
+      : (progressInterrupted
+        ? "已中断 · 第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
+        : (step
+          ? "第 " + step + " / " + STAGE_TOTAL + " 步 · 共 " + progressState.steps + " 条日志"
+          : "等待开始 · 共 0 条日志"));
     bar.setAttribute("aria-valuenow", String(step));
-    $("progress-card").classList.toggle("interrupted", progressInterrupted);
+    $("progress-card").classList.toggle("interrupted", progressInterrupted || progressCancelled);
     $("progress-text").textContent = progressHeader();
   }
 
   function progressHeader(seconds) {
+    if (progressCancelled) {
+      return "已取消 · " + (progressState.percent || 0) + "%";
+    }
     if (progressInterrupted) {
       return "已中断 · " + (progressState.percent || 0) + "%";
     }
@@ -1839,6 +1909,7 @@
     progressMaxIndex = -1;
     progressFailed = false;
     progressInterrupted = false;
+    progressCancelled = false;
     progressState = { node: "", steps: 0, percent: 0 };
     paintProgress();
   }
@@ -1846,7 +1917,16 @@
   // 后端退出/断网：冻结当前进度 + 红色中断标记，不把“卡住”伪装成“完成”
   function markProgressInterrupted(reason) {
     progressInterrupted = true;
+    progressCancelled = false;
     progressState.reason = reason || "";
+    paintProgress();
+  }
+
+  // 用户主动取消：同样是冻结进度，但文案是“已取消”，不制造“出了故障”的错觉
+  function markProgressCancelled() {
+    progressCancelled = true;
+    progressInterrupted = false;
+    progressState.reason = "已取消";
     paintProgress();
   }
 
@@ -2007,7 +2087,11 @@
 
   function setBusy(value, label) {
     busy = value;
-    document.querySelectorAll("button:not(#progress-toggle)").forEach((btn) => { btn.disabled = value; });
+    // 取消按钮必须在运行期间保持可点，所以不能跟着其它按钮一起禁用
+    document.querySelectorAll("button:not(#progress-toggle):not(#cancel-btn)").forEach((btn) => {
+      btn.disabled = value;
+    });
+    if ($("cancel-btn")) $("cancel-btn").hidden = !value || demoMode;
     if (value) {
       $("progress-card").hidden = false;
       const started = Date.now();
@@ -2020,6 +2104,8 @@
     } else {
       clearInterval(timer);
       timer = null;
+      $("cancel-btn").textContent = "取消运行";
+      $("cancel-btn").disabled = false;
       paintProgress();  // 收尾时按最终日志刷新，去掉计时尾巴
     }
   }
@@ -2037,11 +2123,12 @@
   }
 
   // 实时接收后端推送的日志（NDJSON 流），最后一行是 result/error。
-  async function apiStream(path, body) {
+  async function apiStream(path, body, signal) {
     const resp = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!resp.ok) {
       let detail = "";
@@ -2073,7 +2160,10 @@
           }
         } else if (event.type === "log" && event.entry) handleStreamLog(event.entry);
         else if (event.type === "result") result = event.data;
-        else if (event.type === "error") {
+        else if (event.type === "cancelled") {
+          // 主动取消：后端已把会话标成 cancelled，前端走“已取消”终态而不是报错
+          return { __cancelled: true, thread_id: event.thread_id || threadId };
+        } else if (event.type === "error") {
           const failure = new Error(event.message || "后端执行失败");
           failure.backendError = true;
           throw failure;
@@ -2115,7 +2205,7 @@
   function historyStatusLabel(status) {
     const labels = {
       interrupt: "待审批", completed: "已完成", running: "进行中",
-      interrupted: "已中断", failed: "失败",
+      interrupted: "已中断", failed: "失败", cancelled: "已取消",
     };
     return labels[status] || (status || "未知");
   }
@@ -2138,7 +2228,9 @@
             '<span class="history-q" title="' + escapeHtml(row.question || "") + '">' +
               escapeHtml(row.question || "(无问题)") + '</span>' +
             '<div class="history-meta mono">' + escapeHtml(formatHistoryTime(row.updated_at)) +
-              " · " + escapeHtml(row.thread_id) + '</div>' +
+              " · " + escapeHtml(row.thread_id) +
+              (row.parent_thread_id ? " · ↳ 追问自 " + escapeHtml(shortThreadId(row.parent_thread_id)) : "") +
+              '</div>' +
           '</div>' +
           '<span class="history-chip ' + escapeHtml(status) + '">' +
             escapeHtml(historyStatusLabel(status)) + '</span>' +
@@ -2175,7 +2267,8 @@
       showToast(
         data.status === "interrupt" ? "已恢复到待审批会话"
           : (data.status === "interrupted" ? "该会话执行已中断，可重新开始或删除"
-            : "已加载历史会话")
+            : (data.status === "cancelled" ? "该会话已被取消，可重新开始或删除"
+              : "已加载历史会话"))
       );
       if (data.status === "interrupt") {
         const card = !$("draft-card").hidden ? $("draft-card")
@@ -2236,6 +2329,12 @@
   // 流中断（后端退出/断网）与「后端主动返回 error」要分开处理：
   // 前者标 interrupted（可删除/重跑），后者是本次运行失败（failed）。
   async function handleStreamFailure(err) {
+    if (cancelRequested) {
+      // 主动取消触发的 abort 不是故障：不要走“连接中断”那套恢复逻辑
+      cancelRequested = false;
+      handleCancelled();
+      return;
+    }
     const message = (err && err.message) ? err.message : String(err);
     const backendError = Boolean(err && err.backendError);
     if (backendError) {
@@ -2254,6 +2353,36 @@
       } catch (inner) {
         // 后端已经退出时这一步也会失败；下次启动的遗留 running 清理会兜底标 interrupted
       }
+    }
+  }
+
+  // 主动取消：后端已把会话标成 cancelled，界面要冻结进度并给中性提示
+  function handleCancelled() {
+    showToast("已取消本次研究");
+    progressFailed = false;
+    markProgressCancelled();
+    showUnfinished("cancelled");
+  }
+
+  async function requestCancel() {
+    if (!busy) return;
+    if (!threadId) {
+      showToast("会话还在建立中，请稍后再取消");
+      return;
+    }
+    cancelRequested = true;
+    $("cancel-btn").disabled = true;
+    $("cancel-btn").textContent = "正在取消…";
+    if (!demoMode) {
+      try {
+        await fetch("/api/sessions/" + encodeURIComponent(threadId) + "/cancel", { method: "POST" });
+      } catch (err) {
+        // 后端可能刚好结束或已退出；下面照样断开前端流
+      }
+    }
+    // 立刻断开前端流；后端已登记取消，会在下一个节点边界停下并推 cancelled 终态
+    if (runAbort) {
+      try { runAbort.abort(); } catch (err) { /* ignore */ }
     }
   }
 
@@ -2300,9 +2429,10 @@
     latestLogs = data.logs || [];
     threadId = data.thread_id || threadId;
     if (data.question) sessionQuestion = data.question;
-    // 每次完整渲染先清掉上一次的中断/失败标记，再按本次状态重新判定
+    // 每次完整渲染先清掉上一次的中断/失败/取消标记，再按本次状态重新判定
     progressInterrupted = false;
     progressFailed = false;
+    progressCancelled = false;
     renderLogs("log-body", latestLogs);
     renderLogs("final-log-body", latestLogs);
     hidePanels();
@@ -2339,11 +2469,17 @@
     if (unfinished && status === "interrupted") {
       markProgressInterrupted("会话在运行过程中中断");
     }
+    if (status === "cancelled") {
+      markProgressCancelled();
+    }
     $("unfinished-status").textContent = historyStatusLabel(status);
-    $("unfinished-reason").textContent = unfinished
-      ? "这次研究在执行过程中中断了（后端退出、进程被杀或网络断开），已完成的日志保留在「执行进度」里。" +
-        "可以从头重新跑一次，或者删掉这条会话。"
-      : "这个会话已经创建但还没有产生最终结果。可以等它继续跑，或者删掉这条会话。";
+    $("unfinished-reason").textContent = status === "cancelled"
+      ? "这次研究已被你取消，没有生成最终结果。已完成的日志保留在「执行进度」里，" +
+        "可以重新开始，或者删掉这条会话。"
+      : (unfinished
+        ? "这次研究在执行过程中中断了（后端退出、进程被杀或网络断开），已完成的日志保留在「执行进度」里。" +
+          "可以从头重新跑一次，或者删掉这条会话。"
+        : "这个会话已经创建但还没有产生最终结果。可以等它继续跑，或者删掉这条会话。");
     if (finalOutput && finalOutput.errors && finalOutput.errors.length) {
       $("unfinished-reason").textContent += " 最近一次错误：" + (finalOutput.errors[0].error || "");
     }
@@ -2388,6 +2524,7 @@
   function showFinal(final) {
     currentFinal = final;
     if ($("open-report")) $("open-report").hidden = !threadId || demoMode;
+    if ($("follow-up")) $("follow-up").hidden = !threadId || demoMode;
     $("final-status").textContent = STATUS_TEXT[final.status] || final.status || "完成";
     const meta = [
       // 状态给中文标签，原始英文值放 title，避免 completed_with_action_failure 这类长串撑破网格
@@ -2466,6 +2603,34 @@
     document.body.classList.toggle("mode-report", mode === "report");
   }
 
+  function shortThreadId(tid) {
+    return String(tid || "").replace(/^web-/, "").slice(0, 8);
+  }
+
+  // 多轮追问：把“上一轮 thread”记在页面上，下一次开始研究时带给后端
+  function setFollowUp(tid) {
+    parentThread = (tid || "").trim() || null;
+    const hint = $("follow-hint");
+    if (hint) {
+      hint.hidden = !parentThread;
+      if (parentThread) $("follow-hint-text").textContent = "基于上一轮结论追问 · " + shortThreadId(parentThread);
+    }
+    if ($("examples")) $("examples").hidden = Boolean(parentThread);
+  }
+
+  function startFollowUp() {
+    if (!threadId) return;
+    const source = threadId;
+    setFollowUp(source);
+    setLayout("workspace");
+    $("question").value = "";
+    $("question").placeholder = "在这份结论的基础上继续追问，例如：那它的局限是什么？";
+    const card = document.querySelector(".ask-card");
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("question").focus();
+    showToast("已基于会话 " + shortThreadId(source) + " 继续追问");
+  }
+
   function resetAll() {
     setLayout("landing");
     threadId = null;
@@ -2480,6 +2645,8 @@
     $("thread-pill").hidden = true;
     resetProgress();
     $("question").value = "";
+    $("question").placeholder = "例如：LangGraph 如何实现人工中断？";
+    setFollowUp(null);
     $("revise-box").hidden = true;
     demoStage = null;
     demoRevision = 0;
@@ -2502,12 +2669,18 @@
     $("final-log-body").innerHTML = "";
     hidePanels();
     setBusy(true, "正在检索、抓取并总结证据…");
+    cancelRequested = false;
+    runAbort = new AbortController();
     try {
-      const data = await apiStream("/api/research/stream", { question });
+      const body = { question };
+      if (parentThread) body.parent_thread_id = parentThread;
+      const data = await apiStream("/api/research/stream", body, runAbort.signal);
+      if (data && data.__cancelled) { handleCancelled(); return; }
       render(data);
     } catch (err) {
       await handleStreamFailure(err);
     } finally {
+      runAbort = null;
       setBusy(false);
     }
   }
@@ -2523,12 +2696,16 @@
     } else {
       setBusy(true, "正在重新生成草稿…");
     }
+    cancelRequested = false;
+    runAbort = new AbortController();
     try {
-      const data = await apiStream("/api/resume/stream", { thread_id: threadId, value });
+      const data = await apiStream("/api/resume/stream", { thread_id: threadId, value }, runAbort.signal);
+      if (data && data.__cancelled) { handleCancelled(); return; }
       render(data);
     } catch (err) {
       await handleStreamFailure(err);
     } finally {
+      runAbort = null;
       setBusy(false);
     }
   }
@@ -2874,6 +3051,7 @@
     $("settings-modal").hidden = false;
     document.body.style.overflow = "hidden";
     loadConfig();
+    loadKb();
     setTimeout(() => $("api-key").focus(), 60);
   }
 
@@ -2881,6 +3059,60 @@
     $("settings-modal").hidden = true;
     $("api-key").value = "";
     document.body.style.overflow = "";
+  }
+
+  // ---------- 知识库面板：文档列表 / 分块数 / 重建索引 ----------
+  function formatBytes(size) {
+    const n = Number(size) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(2) + " MB";
+  }
+
+  function renderKb(data) {
+    const stats = data.stats || {};
+    const docs = data.documents || [];
+    const index = data.index || {};
+    const vector = stats.vector ? "向量 + BM25 混合" : "BM25（未启用向量）";
+    $("kb-stats").textContent =
+      (stats.documents || 0) + " 篇文档 · " + (stats.chunks || 0) + " 个分块 · " + vector +
+      " · 召回 top" + (stats.top_k || 6) +
+      (index.exists ? " · 索引已缓存" : " · 索引未生成");
+    if (!docs.length) {
+      $("kb-docs").innerHTML = '<p class="muted">knowledge/ 目录下还没有 .md / .txt 文档。放进去后点「重建索引」即可被检索。</p>';
+      return;
+    }
+    $("kb-docs").innerHTML = '<table class="md-table"><thead><tr><th>文档</th><th>标题</th><th>分块</th><th>大小</th></tr></thead><tbody>' +
+      docs.map((doc) =>
+        "<tr><td class='mono'>" + escapeHtml(doc.path) + "</td><td>" + escapeHtml(doc.title || "-") +
+        "</td><td>" + String(doc.chunks || 0) + "</td><td>" + escapeHtml(formatBytes(doc.size)) + "</td></tr>"
+      ).join("") + "</tbody></table>";
+  }
+
+  async function loadKb() {
+    try {
+      const data = await fetchJson("/api/kb");
+      renderKb(data);
+    } catch (err) {
+      $("kb-stats").textContent = "知识库不可用：" + (err.message || String(err));
+      $("kb-docs").innerHTML = "";
+    }
+  }
+
+  async function reindexKb() {
+    const btn = $("kb-reindex");
+    btn.disabled = true;
+    btn.textContent = "重建中…";
+    try {
+      const data = await api("/api/kb/reindex", {});
+      renderKb(data);
+      showToast(data.removed_index ? "索引已删除并重建" : "索引已重建");
+    } catch (err) {
+      showToast("重建失败：" + (err.message || String(err)));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "重建索引";
+    }
   }
 
   function readConfigForm() {
@@ -3007,6 +3239,15 @@
 
   // ---------- 事件绑定 ----------
   $("start-btn").addEventListener("click", startResearch);
+  $("cancel-btn").addEventListener("click", requestCancel);
+  $("follow-up").addEventListener("click", startFollowUp);
+  $("follow-clear").addEventListener("click", () => {
+    setFollowUp(null);
+    $("question").value = "";
+    $("question").placeholder = "例如：LangGraph 如何实现人工中断？";
+    $("question").focus();
+  });
+  $("kb-reindex").addEventListener("click", reindexKb);
   $("question").addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") startResearch();
   });
@@ -3367,6 +3608,14 @@
 
   function bindReportTools() {
     $("report-print").addEventListener("click", () => window.print());
+    const followBtn = $("report-follow");
+    if (followBtn) {
+      followBtn.addEventListener("click", () => {
+        if (!reportThreadId) return;
+        // 回到工作区，并把“基于哪一轮追问”通过 URL 带过去（后端只认 parent_thread_id）
+        location.href = "/app?follow=" + encodeURIComponent(reportThreadId);
+      });
+    }
     $("report-copy").addEventListener("click", () => {
       const url = location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -3413,6 +3662,7 @@
         return;
       }
       currentFinal = final;
+      if ($("report-follow")) $("report-follow").hidden = !reportThreadId;
       renderReportChips(final);
       renderReportBody(final);
       renderEvidencePanel(final);
@@ -3442,6 +3692,7 @@
   const openSettingsOnLoad = urlParams.get("settings") === "1";
   const openHistoryOnLoad = urlParams.get("history") === "1";
   const sessionOnLoad = (urlParams.get("session") || "").trim();
+  const followOnLoad = (urlParams.get("follow") || "").trim();
 
   function maybeAutostart() {
     if (!autoStart) return;
@@ -3466,6 +3717,12 @@
           if (openSettingsOnLoad) openSettings();
           if (openHistoryOnLoad) openHistory();
           if (sessionOnLoad) loadSession(sessionOnLoad);
+          if (followOnLoad) {
+            // 从报告页「继续追问」过来：进入工作区并锁定上一轮会话
+            setLayout("workspace");
+            setFollowUp(followOnLoad);
+            $("question").focus();
+          }
         })
         .finally(maybeAutostart);
     })
