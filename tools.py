@@ -137,7 +137,9 @@ def _tool_timeout(name: str) -> float | None:
     raw = {
         "search_web": os.getenv("AGENT_SEARCH_TIMEOUT", "20"),
         "fetch_page": os.getenv("AGENT_FETCH_TIMEOUT", "15"),
-        "summarize_sources": os.getenv("AGENT_SUMMARIZE_TIMEOUT", "25"),
+        # 证据提取是一次长输出 LLM 调用（实测 glm-4-flash ~750 token 需 27~33s），
+        # 预算给 25s 只会必然超时；这里与 llm_client 的 summarize 超时共用同一个变量。
+        "summarize_sources": os.getenv("AGENT_SUMMARIZE_TIMEOUT", "75"),
     }.get(name)
     if raw is None:
         return None

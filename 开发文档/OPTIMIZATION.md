@@ -339,6 +339,56 @@ rejected_rewrites / checks.remaining_issues`）；消融开关 `AGENT_EVIDENCE_C
 剩余问题 0（状态 passed）；摘要从“存在差异”式空判断变成“LangGraph 用 interrupt 在节点内部暂停，
 AutoGen 靠检查点回放状态”；「分析与推演」每条带【推断】与前提/推翻条件；局限不再与正文自相矛盾。
 代价：单题耗时从 ~140s 升到 ~260s（分节写作 5~6 次调用 + 一次重写预算）。
+后续已通过“分节并发 + 长超时分档”把写作阶段压回来，见 §14。
 
 **遗留**：证据仍是摘录式时，关键发现会出现英文原句（摘要/推演已是中文）；引用校验只能查格式与词面
 相关，查不出“结论对但因果写错”；重写失败时保留已知问题（写入 `draft_review`，不阻塞流程）。
+
+## 14. 实施记录（运行时性能修复：超时放大 / 串行写作 / 耗时归因，2026-11-23）
+
+一次真实运行（`trace_id=7914d6b6`，glm-4-flash，2 轮检索）总耗时 **419.3s**。拆账后：
+
+| 节点/阶段 | 耗时 | 占比 | 是否有效产出 |
+| --- | --- | --- | --- |
+| `summarize_sources` 第 1 轮 | 121.3s | 29% | 否：`Request timed out` → `offline_fallback` |
+| `summarize_sources` 第 2 轮 | 121.6s | 29% | 否：同上 |
+| `draft_report`（6 次串行） | 80.3s | 19% | 是 |
+| `plan_outline` | 22.1s | 5% | 是 |
+| 搜索/抓取/规划等 | ~23s | 5% | 是 |
+| 人工确认等待（两次 interrupt） | 50.5s | 12% | 是（用户操作） |
+
+### 根因
+
+1. **一次 30s 超时被放大成 121s**：`_sdk` 用 `max_retries=1`（×2），`_chat` 又在任意异常时
+   “去掉 `response_format` 再试一次”（×2），合计 4×30s≈120s，实测 121.3s；
+2. **30s 对长输出本来就不够**：用同一 Key 实测 `summarize_evidence`，输出 750 token 需 **27~33s**
+   （glm-4-flash 约 23 token/s），正好压在超时线上，必然间歇失败；
+3. **工具预算形同虚设**：`call_tool` 的 deadline 只在两次重试之间检查，单次阻塞调用可任意超过 25s；
+4. **分节写作串行**：6 次调用逐个跑；
+5. **419s 混入 50.5s 人工等待**：`duration_ms` 取墙钟差，展示时无法区分“系统慢”和“人在看”。
+
+### 修复
+
+| 修复 | 位置 | 验证 |
+| --- | --- | --- |
+| 超时只发一次请求，不叠加格式回退；仅 400/422 回退纯文本；429/5xx/连接错误快速重试一次；SDK `max_retries=0` | `llm_client._chat` / `_sdk` | `test_llm_timeout_policy.py`（超时 1 次调用、400 回退 2 次、503 重试 1 次、SDK 参数） |
+| 长输出调用分档 `AGENT_LLM_TIMEOUT_LONG=75`：证据提取、大纲、分节、重写 | `LLMClient.long_timeout`；`AGENT_SUMMARIZE_TIMEOUT` 与 summon 超时同源 | 真实调用实测：**121.3s + 降级 → 33.2s 成功（mode=openai，6 条证据）** |
+| 分节写作并发（默认 3，`AGENT_DRAFT_CONCURRENCY`，1~4），按大纲顺序拼装，`previous_titles` 预计算保持提示词不变，token 累计加锁 | `LLMClient._draft_by_sections` / `_run_section_job` | `test_draft_concurrency.py`（并发度、顺序与串行逐字节一致、usage 计数） |
+| 总耗时拆分：`compute_ms` = span 耗时之和，`hitl_wait_ms` = 差值；前端「总耗时 / 其中人工确认等待」、Word 导出同口径 | `graph._timing_split` / `finalize` / `index.html` / `web.py` | `test_timing_split.py`（含 trace 缺失不编造） |
+| trace `started_at` 改为开始时间（原为完成时刻，导致时间线重叠/负间隔） | `tracing.TraceRecorder.add_span` | `test_trace_timestamp.py` |
+| 写操作确认点校验收件人格式（原在执行时才报错，运行以 `completed_with_action_failure` 收尾） | `graph.human_confirm_actions` | `test_email_precheck.py` |
+
+### 结果
+
+- 全量测试 **226 → 247 passed**（新增 5 个测试文件 / 21 例）；
+- 证据提取两轮：**242.9s（降级） → 66s（成功拿到 LLM 证据）**；
+- 分节写作：**80.3s → 约 20~30s**（6 次调用并发，默认并发 3）；
+- 总耗时展示：计算 368.8s + 人工 50.5s 分开呈现，不再把人工审稿算成系统耗时；
+- 端到端实测（真实 glm-4-flash + 本地固定 3 页面，排除抓取波动；`trace_id=3f40a11e`）：
+  **48.4s**（计算 48.4s / 人工 0.05s），证据提取 **13.0s 且成功**，大纲 14.3s，
+  6 次分节写作 **15.5s**，3 来源 / 3 证据 / 覆盖 5/5；
+- 剩余瓶颈：模型吐字速度（glm-4-flash ~23 token/s）与 2 轮检索结构；换更快模型/减少轮次是下一步，
+  但会牺牲质量或覆盖度，暂不做。
+
+**遗留风险**：超时预算调大后，网络极差时单节点等待上限从 30s 提高到 75s；可用
+`AGENT_LLM_TIMEOUT_LONG` 调小，代价是长输出调用更容易降级。

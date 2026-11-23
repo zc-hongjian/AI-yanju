@@ -617,6 +617,20 @@ def get_session_diff(thread_id: str) -> dict[str, Any]:
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
+def _duration_text(ms: Any) -> str:
+    """把毫秒数转成人可读的耗时，例如 419302 → "6 分 59 秒"。"""
+    try:
+        value = max(0, int(ms or 0))
+    except (TypeError, ValueError):
+        value = 0
+    if value < 1000:
+        return f"{value} ms"
+    if value < 60_000:
+        return f"{value / 1000:.1f} 秒"
+    minutes, seconds = divmod(round(value / 1000), 60)
+    return f"{minutes} 分 {seconds} 秒" if seconds else f"{minutes} 分"
+
+
 def _docx_filename(title: str) -> str:
     """中文文件名用 RFC 5987 的 filename*，同时给一个 ASCII 兜底名。"""
     safe = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "-", str(title or "")).strip("-")[:40]
@@ -642,7 +656,15 @@ def export_session_docx(thread_id: str) -> Response:
         ("来源数", str(len(final.get("sources") or []))),
         ("证据数", str(final.get("evidence_count") or 0)),
         ("覆盖", f"{coverage.get('covered', 0)}/{coverage.get('total', 0)}" if coverage.get("total") else "-"),
-        ("耗时", f"{final.get('duration_ms', 0)} ms"),
+        (
+            "耗时",
+            _duration_text(final.get("duration_ms", 0))
+            + (
+                f"（其中人工确认 {_duration_text(final.get('hitl_wait_ms', 0))}）"
+                if final.get("hitl_wait_ms")
+                else ""
+            ),
+        ),
         ("模型", str(final.get("model") or final.get("llm_mode") or "-")),
     ]
     try:

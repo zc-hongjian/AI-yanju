@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 import prompts
@@ -215,6 +217,57 @@ def _normalize_url(url: str) -> str:
     return url.rstrip("/").lower()
 
 
+# ------------------------------------------------------------------ 错误分类
+# 只做「按类型判断」，不直接 import openai：离线模式/测试环境可能没有安装 SDK。
+def _status_code(exc: BaseException) -> int | None:
+    for attr in ("status_code", "http_status", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "timeout" in name or "timed out" in text or "timeout" in text
+
+
+def _is_format_unsupported(exc: BaseException) -> bool:
+    """400/422 通常意味着网关不认 response_format 之类的参数，去掉再试一次值得。"""
+    return _status_code(exc) in {400, 422}
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """限流 / 网关 5xx / 连接类抖动：短退避重试一次，不放大超时预算。"""
+    if _status_code(exc) in {408, 409, 425, 429, 500, 502, 503, 504}:
+        return True
+    name = type(exc).__name__.lower()
+    return any(token in name for token in ("connection", "remoteprotocol", "readerror", "connecterror"))
+
+
+def _env_positive_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _draft_concurrency() -> int:
+    """分节写作并发度：默认 3；设 1 可退回逐节串行（便于对比/排障）。"""
+    try:
+        value = int(os.getenv("AGENT_DRAFT_CONCURRENCY", "3"))
+    except ValueError:
+        value = 3
+    return max(1, min(value, 4))
+
+
 class LLMClient:
     def __init__(
         self,
@@ -238,7 +291,12 @@ class LLMClient:
             requested = "offline"
         self.mode = requested
         self._client: Any = None
-        # token 用量累计，供日志/成本核算使用；offline 模式恒为 0
+        # 长输出调用（证据提取 / 大纲 / 报告分节）要用更宽的预算：
+        # 实测 glm-4-flash 输出 750 token 就要 27~33s，30s 的单次超时必然频繁触发；
+        # 超时后再重试只会把一次 30s 放大成 4×30s（见 _chat 的注释），所以单独分档。
+        self.long_timeout = float(os.getenv("AGENT_LLM_TIMEOUT_LONG", "75"))
+        self._usage_lock = threading.Lock()
+        # token 用量累计，供日志/成本核算使用；离线模式恒为 0
         self.usage: dict[str, int] = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -253,10 +311,12 @@ class LLMClient:
         prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion = int(getattr(usage, "completion_tokens", 0) or 0)
         total = int(getattr(usage, "total_tokens", prompt + completion) or (prompt + completion))
-        self.usage["prompt_tokens"] += prompt
-        self.usage["completion_tokens"] += completion
-        self.usage["total_tokens"] += total
-        self.usage["calls"] += 1
+        # 分节写作会并发调用，累计器必须加锁，否则 token 统计会丢
+        with self._usage_lock:
+            self.usage["prompt_tokens"] += prompt
+            self.usage["completion_tokens"] += completion
+            self.usage["total_tokens"] += total
+            self.usage["calls"] += 1
 
     def usage_snapshot(self) -> dict[str, int]:
         return dict(self.usage)
@@ -293,7 +353,9 @@ class LLMClient:
                 api_key=self.api_key,
                 base_url=self.base_url,
                 timeout=self.timeout,
-                max_retries=1,
+                # 不交给 SDK 隐式重试：超时被内部重试一次，再叠加 _chat 的格式回退，
+                # 一次 30s 超时就会变成 4×30s=120s（实测 121s），而结果没有任何改善。
+                max_retries=0,
             )
         return self._client
 
@@ -325,6 +387,7 @@ class LLMClient:
         temperature: float = 0.2,
         max_tokens: int = 2200,
         response_format: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> str:
         if self.mode != "openai":
             raise LLMError("当前为 offline 模式，自由文本调用不可用")
@@ -332,9 +395,13 @@ class LLMClient:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+        budget = float(timeout if timeout is not None else self.timeout)
 
         def _create(extra: dict[str, Any]) -> Any:
-            return self._sdk().chat.completions.create(
+            client = self._sdk()
+            if budget != self.timeout:
+                client = client.with_options(timeout=budget)
+            return client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
@@ -342,23 +409,44 @@ class LLMClient:
                 **extra,
             )
 
+        # 重试策略（性能修复：一次 30s 超时曾被放大成 4×30s=120s）：
+        # 1) 超时只发一次请求，绝不再叠加「去掉 response_format 重试」——超时与格式无关；
+        # 2) 只有 400/422（网关不支持 response_format 的常见形态）才回退成纯文本再试一次；
+        # 3) 429/5xx/连接类错误快速重试一次（短退避），保住偶发抖动时的可用性。
         try:
-            try:
-                resp = _create({"response_format": response_format} if response_format else {})
-            except Exception:
-                # 部分兼容网关不支持 response_format：去掉再试一次
-                if not response_format:
-                    raise
-                resp = _create({})
-        except Exception as exc:
-            raise LLMError(f"LLM 请求失败：{exc}") from exc
+            resp = _create({"response_format": response_format} if response_format else {})
+        except Exception as exc:  # noqa: BLE001 - 统一转换成 LLMError 由上层降级
+            if _is_timeout_error(exc):
+                raise LLMError(f"LLM 请求超时（{budget:.0f}s）：{exc}") from exc
+            if response_format and _is_format_unsupported(exc):
+                try:
+                    resp = _create({})
+                except Exception as retry_exc:  # noqa: BLE001
+                    if _is_timeout_error(retry_exc):
+                        raise LLMError(f"LLM 请求超时（{budget:.0f}s）：{retry_exc}") from retry_exc
+                    raise LLMError(f"LLM 请求失败：{retry_exc}") from retry_exc
+            elif _is_transient_error(exc):
+                time.sleep(0.8)
+                try:
+                    resp = _create({"response_format": response_format} if response_format else {})
+                except Exception as retry_exc:  # noqa: BLE001
+                    raise LLMError(f"LLM 请求失败：{retry_exc}") from retry_exc
+            else:
+                raise LLMError(f"LLM 请求失败：{exc}") from exc
         self._record_usage(resp)
         content = (resp.choices[0].message.content or "").strip()
         if not content:
             raise LLMError("LLM 返回空内容")
         return content
 
-    def chat_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict[str, Any]:
+    def chat_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.0,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         # JSON 模式下要求网关返回合法 JSON（智谱/OpenAI 都支持），解析失败再退回纯文本解析
         try:
             return parse_json_object(
@@ -367,12 +455,13 @@ class LLMClient:
                     user,
                     temperature=temperature,
                     response_format={"type": "json_object"},
+                    timeout=timeout,
                 )
             )
         except LLMError as exc:
             if "JSON" not in str(exc):
                 raise
-            return parse_json_object(self._chat(system, user, temperature=temperature))
+            return parse_json_object(self._chat(system, user, temperature=temperature, timeout=timeout))
 
     # ---------------------------------------------- 检索计划（技术搜索专家）
     def plan_research(
@@ -519,7 +608,13 @@ class LLMClient:
                 "mode": "offline",
             }
         try:
-            data = self.chat_json(prompts.SUMMARIZE_SYSTEM, prompts.summarize_user(question, usable))
+            data = self.chat_json(
+                prompts.SUMMARIZE_SYSTEM,
+                prompts.summarize_user(question, usable),
+                # 证据提取是长输出（实测 ~750 token / 27~33s），用长超时分档；
+                # AGENT_SUMMARIZE_TIMEOUT 与工具层预算是同一个值，避免“预算 25s、实际 121s”的假配置。
+                timeout=_env_positive_float("AGENT_SUMMARIZE_TIMEOUT", self.long_timeout),
+            )
         except LLMError as exc:
             return {
                 "evidence": heuristic_evidence(question, usable),
@@ -560,6 +655,7 @@ class LLMClient:
                 data = self.chat_json(
                     prompts.OUTLINE_SYSTEM,
                     prompts.outline_user(question, sub_questions, evidence, uncovered or ()),
+                    timeout=self.long_timeout,
                 )
             except LLMError as exc:
                 last_error = str(exc)
@@ -606,6 +702,7 @@ class LLMClient:
                     prompts.draft_user(question, evidence, sources, feedback),
                     temperature=0.3,
                     max_tokens=2600,
+                    timeout=self.long_timeout,
                 )
             except LLMError:
                 return heuristic_draft(question, evidence, sources, feedback, uncovered=uncovered), "offline_fallback"
@@ -628,67 +725,109 @@ class LLMClient:
         uncovered: list[str],
         feedback: str,
     ) -> str:
+        """按大纲逐节生成正文。
+
+        各节之间没有正文依赖（只依赖“前文出现过哪些小节标题”），所以把 LLM 调用
+        并发执行、再按大纲顺序拼装：实测 6 次串行调用 80s，并发后约 20~30s。
+        ``AGENT_DRAFT_CONCURRENCY=1`` 可退回逐节串行（对比/排障用，输出完全一致）。
+        """
         all_ids = list(range(1, len(evidence) + 1))
-        parts: list[str] = []
-        previous: list[str] = []
-        has_summary = False
-        for section in sections:
+        parts: list[str | None] = [None] * len(sections)
+        titles: list[str] = []
+        summary_index: int | None = None
+        jobs: list[tuple[int, str, dict[str, Any]]] = []
+        for index, section in enumerate(sections):
             title = str(section.get("title") or "").strip()
             key = str(section.get("key") or "")
             if not title:
                 continue
             ids = [int(value) for value in (section.get("evidence_ids") or all_ids)]
             ids = [value for value in ids if 1 <= value <= len(evidence)] or all_ids
+            previous_titles = list(titles)
             if title == reporting.LIMITS_TITLE or key == "limits":
-                parts.append("\n".join(reporting.limits_lines(evidence, uncovered)))
-                previous.append(title)
-                continue
-            if title == reporting.SUMMARY_TITLE or key == "summary":
-                body = self._chat(
-                    prompts.DRAFT_SUMMARY_SYSTEM,
-                    prompts.draft_summary_user(question, evidence, ids=ids, feedback=feedback),
-                    temperature=0.2,
-                    max_tokens=500,
-                )
-                parts.append(f"## {reporting.SUMMARY_TITLE}\n\n{_strip_heading(body)}")
-                previous.append(title)
-                has_summary = True
-                continue
-            if title == reporting.FINDINGS_TITLE or key == "findings":
+                # 「局限与未证实」由程序按证据生成，不调模型。
+                parts[index] = "\n".join(reporting.limits_lines(evidence, uncovered))
+            elif title == reporting.FINDINGS_TITLE or key == "findings":
                 # 「关键发现」由程序按证据生成：条条有角标、不重复、不会被模型写成大段散文
-                body = "\n".join(reporting.find_bullets(evidence, ids))
-                parts.append(f"## {reporting.FINDINGS_TITLE}\n\n{body}")
-                previous.append(title)
-                continue
-            if title == reporting.ANALYSIS_TITLE or key == "analysis":
-                body = self._chat(
-                    prompts.DRAFT_ANALYSIS_SYSTEM,
-                    prompts.draft_analysis_user(
-                        question, evidence, ids=ids, uncovered=uncovered, feedback=feedback
-                    ),
-                    temperature=0.4,
-                    max_tokens=900,
+                parts[index] = (
+                    f"## {reporting.FINDINGS_TITLE}\n\n"
+                    + "\n".join(reporting.find_bullets(evidence, ids))
                 )
-                parts.append(f"## {reporting.ANALYSIS_TITLE}\n\n{_strip_heading(body)}")
-                previous.append(title)
-                continue
-            body = self._chat(
-                prompts.DRAFT_SECTION_SYSTEM,
-                prompts.draft_section_user(
-                    question, section, evidence, previous_titles=previous, feedback=feedback
-                ),
-                temperature=0.3,
-                max_tokens=900,
-            )
-            parts.append(f"## {title}\n\n{_strip_heading(body)}")
-            previous.append(title)
+            elif title == reporting.SUMMARY_TITLE or key == "summary":
+                summary_index = index
+                jobs.append((index, "summary", {"ids": ids}))
+            elif title == reporting.ANALYSIS_TITLE or key == "analysis":
+                jobs.append((index, "analysis", {"ids": ids}))
+            else:
+                jobs.append((index, "section", {"section": section, "previous": previous_titles}))
+            titles.append(title)
 
-        if not has_summary:
+        workers = _draft_concurrency()
+        if workers <= 1 or len(jobs) <= 1:
+            for job in jobs:
+                index, text = self._run_section_job(question, evidence, uncovered, feedback, job)
+                parts[index] = text
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+                futures = [
+                    pool.submit(self._run_section_job, question, evidence, uncovered, feedback, job)
+                    for job in jobs
+                ]
+                for future in futures:
+                    index, text = future.result()
+                    parts[index] = text
+
+        if summary_index is None:
             parts.insert(
                 0,
                 f"## {reporting.SUMMARY_TITLE}\n\n{_fallback_summary(question, evidence)}",
             )
-        return "\n\n".join(parts)
+        return "\n\n".join(text for text in parts if text)
+
+    def _run_section_job(
+        self,
+        question: str,
+        evidence: list[dict[str, Any]],
+        uncovered: list[str],
+        feedback: str,
+        job: tuple[int, str, dict[str, Any]],
+    ) -> tuple[int, str]:
+        """执行一个写作任务；返回值可在线程池中乱序完成，由调用方按大纲重排。"""
+        index, kind, payload = job
+        if kind == "summary":
+            body = self._chat(
+                prompts.DRAFT_SUMMARY_SYSTEM,
+                prompts.draft_summary_user(
+                    question, evidence, ids=payload["ids"], feedback=feedback
+                ),
+                temperature=0.2,
+                max_tokens=500,
+                timeout=self.long_timeout,
+            )
+            return index, f"## {reporting.SUMMARY_TITLE}\n\n{_strip_heading(body)}"
+        if kind == "analysis":
+            body = self._chat(
+                prompts.DRAFT_ANALYSIS_SYSTEM,
+                prompts.draft_analysis_user(
+                    question, evidence, ids=payload["ids"], uncovered=uncovered, feedback=feedback
+                ),
+                temperature=0.4,
+                max_tokens=900,
+                timeout=self.long_timeout,
+            )
+            return index, f"## {reporting.ANALYSIS_TITLE}\n\n{_strip_heading(body)}"
+        section = payload["section"]
+        title = str(section.get("title") or "").strip()
+        body = self._chat(
+            prompts.DRAFT_SECTION_SYSTEM,
+            prompts.draft_section_user(
+                question, section, evidence, previous_titles=payload["previous"], feedback=feedback
+            ),
+            temperature=0.3,
+            max_tokens=900,
+            timeout=self.long_timeout,
+        )
+        return index, f"## {title}\n\n{_strip_heading(body)}"
 
     def rewrite_draft(
         self,
@@ -705,6 +844,7 @@ class LLMClient:
                 prompts.rewrite_user(question, draft, issues),
                 temperature=0.2,
                 max_tokens=3000,
+                timeout=self.long_timeout,
             )
         except LLMError as exc:
             print(f"[研究助手] 草稿重写失败，改为程序修复：{exc}", flush=True)

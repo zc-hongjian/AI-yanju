@@ -138,7 +138,13 @@ class TraceRecorder:
     ) -> dict[str, Any]:
         usage = usage or {}
         cost = estimate_cost(model, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
-        started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+        # started_at 必须是「开始时间」：面板按它排序/画时间线。
+        # 早期实现写成了写入时刻（= 结束时间），导致并发节点看起来互相重叠、间隔为负；
+        # start 参数是 perf_counter，这里用「结束时刻 - 耗时」还原墙钟开始时间。
+        ended = datetime.now(timezone.utc).astimezone()
+        started_at = (ended - timedelta(milliseconds=max(0, int(latency_ms)))).isoformat(
+            timespec="milliseconds"
+        )
         span = {
             "type": "span",
             "trace_id": self.trace_id,

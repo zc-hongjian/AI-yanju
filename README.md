@@ -5,7 +5,7 @@
 >
 > 14 节点 LangGraph 图 · 3 次 human-in-the-loop · 引用可回溯 · 断点恢复 · 可观测 Trace/成本 · 本地知识库 RAG
 
-**当前状态**：226 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
+**当前状态**：247 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
 
 ---
 
@@ -180,7 +180,7 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 | 会话持久化与多轮 | SQLite checkpointer 断点恢复 + 会话索引；`parent_thread_id` 注入上一轮结论（≤1200 字） |
 | 可观测 | 节点 Span（耗时/token/成本）、价目表最长前缀匹配、未知模型标「估算」、`/api/trace` 与成本汇总 |
 | 知识库 RAG | 标题分块（800/120 重叠）→ BM25（中文 bigram）→ 可选向量 → RRF；无 Key 自动降级 BM25 |
-| 性能 | 搜索/抓取 TTL 缓存（默认 24h）+ 并发抓取（默认 3，可设 1 退回串行）：同一问题二次运行实测 23.8s → 3.4s |
+| 性能 | 搜索/抓取 TTL 缓存（默认 24h）+ 并发抓取（默认 3）：同一问题二次运行实测 23.8s → 3.4s；报告分节并发写作（默认 3）；LLM 长输出单独超时分档，超时不再被重试放大（一次 30s 曾被放大成 121s，证据提取因此从 121s 降到 33s）；总耗时拆成「计算」与「人工确认等待」展示；真实 LLM 端到端实测 48.4s（3 页、1 轮） |
 | 写操作可靠性 | 写操作审计表 + 幂等键：同一运行里重复执行不会重复发邮件/重复写 Notion；失败允许重试 |
 | 交付物 | Markdown / Word（`.docx`）/ 打印 PDF / 报告阅读页 / 多轮报告 diff / 历史检索 / 成本看板 |
 
@@ -302,12 +302,13 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 | `AGENT_EVIDENCE_MAX` / `AGENT_EVIDENCE_PER_SOURCE` | 离线证据总条数/每来源条数，16 / 3 |
 | `AGENT_TOOL_MAX_ATTEMPTS` / `AGENT_RETRY_BASE_DELAY` | 重试次数 3 / 退避基数 0.5s |
 | `AGENT_SEARCH_PROVIDERS` | 搜索提供方顺序，默认 `bing,so360,duckduckgo,wikipedia` |
-| `AGENT_SEARCH_TIMEOUT` / `AGENT_FETCH_TIMEOUT` / `AGENT_SUMMARIZE_TIMEOUT` | 单次工具预算 20 / 15 / 25s |
+| `AGENT_SEARCH_TIMEOUT` / `AGENT_FETCH_TIMEOUT` / `AGENT_SUMMARIZE_TIMEOUT` | 单次工具预算 20 / 15 / 75s（证据提取是长输出 LLM 调用） |
 | `AGENT_SEARCH_NODE_BUDGET` / `AGENT_FETCH_NODE_BUDGET` | 节点时间预算 40 / 45s |
 | `AGENT_FETCH_MAX_ATTEMPTS` | 抓取阶段最多尝试 URL 数，默认 8（成功 3 个即止） |
 | `AGENT_PROVIDER_FAILURE_LIMIT` | 提供方连续失败几次后跳过，默认 2 |
 | `AGENT_MOJIBAKE_RATIO` | 乱码段落丢弃阈值，默认 0.3 |
-| `AGENT_LLM_TIMEOUT` | 单次 LLM 请求超时，默认 30s |
+| `AGENT_LLM_TIMEOUT` / `AGENT_LLM_TIMEOUT_LONG` | 单次 LLM 超时 30s / 长输出调用 75s（超时不再叠加格式回退重试） |
+| `AGENT_DRAFT_CONCURRENCY` | 报告分节并发度，默认 3（夹取 1~4） |
 | `AGENT_PRICE_INPUT_PER_MTOK` / `AGENT_PRICE_OUTPUT_PER_MTOK` | token 单价（元/百万），1.0 / 4.0 |
 | `AGENT_LINK_CITATIONS` | `[S#]` 是否可点击，默认 1；0 用于消融 |
 | `AGENT_PLAN_SUB_QUESTIONS` | 是否生成子问题，默认 1；0 用于消融 |
@@ -367,7 +368,7 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 ## 测试与验收
 
 ```bash
-pytest -q                              # 226 passed
+pytest -q                              # 247 passed
 python evaluation/acceptance_check.py  # 9/9（生成 FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ```
@@ -381,7 +382,7 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 | [原型图/](原型图/) | 22 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 36 个测试文件 / 226 用例 |
+| [tests/](tests/) | 40 个测试文件 / 247 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 

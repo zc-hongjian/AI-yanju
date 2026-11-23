@@ -121,6 +121,27 @@ def _elapsed_ms(start: float) -> int:
     return int(round((time.perf_counter() - start) * 1000))
 
 
+def _timing_split(duration_ms: int, trace_id: str) -> tuple[int, int]:
+    """把总耗时拆成「节点计算耗时」与「人工确认等待（含节点间调度开销）」。
+
+    两次 interrupt 之间的等待不落在任何节点 span 里，所以：
+    计算耗时 = 本轮所有 span 的 latency 之和；总耗时 - 计算耗时 = 等待时间。
+    trace 缺失/损坏时退回 (总耗时, 0)，宁可少报也不编造。
+    """
+    total = max(0, int(duration_ms or 0))
+    if not total:
+        return 0, 0
+    work = 0
+    try:
+        data = tracing.read_trace(trace_id) or {}
+        work = sum(max(0, int(span.get("latency_ms") or 0)) for span in data.get("spans") or [])
+    except (OSError, ValueError, TypeError):  # trace 读不出来时不影响收尾
+        work = 0
+    if work <= 0 or work > total:
+        return total, 0
+    return work, total - work
+
+
 def _usage_delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
     keys = ("prompt_tokens", "completion_tokens", "total_tokens", "calls")
     return {key: max(0, int(after.get(key, 0)) - int(before.get(key, 0))) for key in keys}
@@ -1383,6 +1404,17 @@ def human_confirm_actions(state: ResearchState) -> dict[str, Any]:
                 }
             )
             email_payload = None
+        elif not tools.EMAIL_RE.match(str(email_payload.get("to") or "").strip()):
+            # 在暂停点就拦住：否则人工点了“同意”，execute_actions 才报格式错误，
+            # 运行会以 completed_with_action_failure 收尾（实测出现过一次）。
+            errors.append(
+                {
+                    "node": "human_confirm_actions",
+                    "type": "invalid_email_to",
+                    "error": f"已同意发邮件，但收件人「{email_payload.get('to')}」格式不合法，已跳过该动作",
+                }
+            )
+            email_payload = None
         else:
             approved.append("send_email")
 
@@ -1607,6 +1639,12 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         )
     except ValueError:
         duration_ms = 0
+    trace_id = str(state.get("trace_id") or "")
+    compute_ms, hitl_wait_ms = _timing_split(duration_ms, trace_id)
+    # 免费模型（如 glm-4-flash）按价目表 0 元计价：明确标注，避免把 ¥0 误读成计价 bug。
+    cost_note = ""
+    if cost_cny == 0 and token_usage["total_tokens"] > 0 and not cost_info["estimated"]:
+        cost_note = "免费模型（价目表按 0 元计价）"
     plan = state.get("plan") or {}
     coverage_summary = state.get("coverage_summary") or {}
     verification = state.get("verification") or {}
@@ -1617,7 +1655,8 @@ def finalize(state: ResearchState) -> dict[str, Any]:
             f"status={status}；日志步骤={stats['total'] + 1}；重试={stats['retries']}；"
             f"覆盖={coverage_summary.get('covered', 0)}/{coverage_summary.get('total', 0)}；"
             f"支持率={verification.get('support_rate', 0):.0%}；"
-            f"耗时={duration_ms}ms；token={token_usage['total_tokens']}；成本=¥{cost_cny}"
+            f"耗时={duration_ms}ms（计算 {compute_ms}ms + 人工等待 {hitl_wait_ms}ms）；"
+            f"token={token_usage['total_tokens']}；成本=¥{cost_cny}"
         ),
         status="ok" if status.startswith("completed") else "degraded",
     )
@@ -1653,7 +1692,11 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         "cost_by_node": cost_by_node,
         "cost_estimated": bool(cost_info["estimated"]),
         "cost_price_source": cost_info["price_source"],
+        "cost_note": cost_note,
         "duration_ms": duration_ms,
+        # 性能归因：总耗时里有多少是真在算、多少在等人工确认
+        "compute_ms": compute_ms,
+        "hitl_wait_ms": hitl_wait_ms,
         "trace_id": state.get("trace_id", ""),
         "started_at": state.get("started_at", ""),
         "finished_at": now_iso(),
@@ -1664,6 +1707,8 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         {
             "status": status,
             "duration_ms": duration_ms,
+            "compute_ms": compute_ms,
+            "hitl_wait_ms": hitl_wait_ms,
             "model": model,
             "prompt_tokens": token_usage["prompt_tokens"],
             "completion_tokens": token_usage["completion_tokens"],

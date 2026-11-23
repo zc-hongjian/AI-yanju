@@ -2412,6 +2412,16 @@
     return "¥" + (Number(value) || 0).toFixed(4);
   }
 
+  // 耗时展示：<60s 用秒（1 位小数），>=60s 用「X 分 Y 秒」，不再直接甩 419302 ms
+  function formatDuration(ms) {
+    const value = Math.max(0, Number(ms) || 0);
+    if (value < 1000) return Math.round(value) + " ms";
+    if (value < 60000) return (value / 1000).toFixed(1) + " 秒";
+    const minutes = Math.floor(value / 60000);
+    const seconds = Math.round((value % 60000) / 1000);
+    return minutes + " 分 " + (seconds ? seconds + " 秒" : "");
+  }
+
   function renderCost(data) {
     const totals = data.totals || {};
     $("cost-meta").textContent =
@@ -2756,10 +2766,14 @@
         ? Math.round(((final.verification || {}).support_rate || 0) * 100) + "%"
         : "-"],
       ["检索轮次", String(final.retrieval_rounds || 1)],
-      ["耗时", String(final.duration_ms || 0) + " ms"],
+      ["总耗时", formatDuration(final.duration_ms),
+        "计算 " + formatDuration(final.compute_ms != null ? final.compute_ms : final.duration_ms) +
+        " · 人工确认 " + formatDuration(final.hitl_wait_ms || 0)],
+      ["其中人工确认等待", formatDuration(final.hitl_wait_ms || 0),
+        "两次 interrupt 的人工审稿/确认时间，不计入计算耗时"],
       ["token", String((final.token_usage || {}).total_tokens || 0)],
       ["成本", "¥" + String(final.cost_cny == null ? 0 : final.cost_cny) +
-        (final.cost_estimated ? "（估算）" : "")],
+        (final.cost_estimated ? "（估算）" : ""), final.cost_note || "按配置价目表计算"],
       ["模型", final.model || "-"],
       ["trace_id", final.trace_id || "-"],
       ["日志条数", String((final.log_summary || {}).total || latestLogs.length)],
@@ -3148,6 +3162,9 @@
       token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, calls: 0 },
       cost_cny: 0,
       duration_ms: 0,
+      compute_ms: 0,
+      hitl_wait_ms: 0,
+      cost_note: "静态演示：未调用模型",
       actions: actions,
       errors: [],
       llm_mode: "demo",
@@ -3637,7 +3654,8 @@
     const ver = final.verification || {};
     if (ver.total) chips.push("<span>支持率 " + Math.round((ver.support_rate || 0) * 100) + "%</span>");
     chips.push("<span>检索 " + (final.retrieval_rounds || 1) + " 轮</span>");
-    chips.push("<span>耗时 " + Math.round((final.duration_ms || 0) / 1000) + "s</span>");
+    chips.push("<span>耗时 " + formatDuration(final.duration_ms) +
+      ((final.hitl_wait_ms || 0) > 0 ? "（人工 " + formatDuration(final.hitl_wait_ms) + "）" : "") + "</span>");
     chips.push("<span>成本 ¥" + (final.cost_cny == null ? 0 : final.cost_cny) + (final.cost_estimated ? "（估算）" : "") + "</span>");
     if (final.finished_at) {
       chips.push("<span>完成于 " + escapeHtml(String(final.finished_at).slice(0, 16).replace("T", " ")) + "</span>");

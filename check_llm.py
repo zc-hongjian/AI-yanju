@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n排查建议：")
         print("  1. 401：Key 无效 / 复制时带了空格；")
         print("  2. 404：Base URL 通常要带 /v1（Ollama 也是 http://127.0.0.1:11434/v1）；")
-        print("  3. 超时：调大 AGENT_LLM_TIMEOUT（默认 30 秒）；")
+        print("  3. 超时：调大 AGENT_LLM_TIMEOUT（短调用，默认 30 秒）或 AGENT_LLM_TIMEOUT_LONG（长输出，默认 75 秒）；")
         print("  4. 网关不支持 tools：代码会自动回退到 JSON 规划，仍应能拿到搜索词。")
         return 1
 
