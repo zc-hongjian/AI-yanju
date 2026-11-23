@@ -277,6 +277,71 @@ def _content_fingerprint(content: str) -> str:
     return hashlib.md5(compact.encode("utf-8", errors="ignore")).hexdigest()
 
 
+# 搜索结果里的视频站/搜索引擎聚合页/跳转页：抓不出正文，只会浪费有限的抓取预算
+JUNK_RESULT_HOSTS = {"tv.360kan.com", "m.tv.360kan.com", "ai.so.com"}
+
+
+def _is_junk_result_url(url: str) -> bool:
+    """判断搜索结果 URL 是否是“看起来像网页、实际不可用”的聚合/搜索页。"""
+    raw = str(url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return True
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return True
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if not host:
+        return True
+    if host in JUNK_RESULT_HOSTS or host.endswith("360kan.com"):
+        return True
+    if host.endswith("so.com") and "/search" in path:
+        return True
+    if host.endswith("bing.com") and "/search" in path:
+        return True
+    if host.endswith("baidu.com") and path.startswith("/s"):
+        return True
+    if host.endswith("google.com") and path.startswith("/search"):
+        return True
+    return False
+
+
+def _snippet_pages(
+    results: list[dict[str, Any]], *, limit: int = 6, min_chars: int = 40
+) -> list[dict[str, Any]]:
+    """正文全部抓取失败时的最后兜底：把搜索引擎摘要拼成“摘要级页面”。
+
+    只在零页时启用，页面带 ``snippet_only=True``；下游会把证据标注为“仅摘要、
+    未抓取正文，需复核原文”，不会冒充全文证据，也不会编造正文没有的内容。
+    """
+    pages: list[dict[str, Any]] = []
+    per_host: dict[str, int] = {}
+    seen: set[str] = set()
+    for hit in results:
+        url = str(hit.get("url") or "").strip()
+        snippet = " ".join(str(hit.get("snippet") or "").split())
+        if not url or len(snippet) < min_chars or url in seen or _is_junk_result_url(url):
+            continue
+        host = (urlparse(url).hostname or "").lower()
+        if per_host.get(host, 0) >= 2:
+            continue
+        seen.add(url)
+        per_host[host] = per_host.get(host, 0) + 1
+        pages.append(
+            {
+                "url": url,
+                "title": str(hit.get("title") or "")[:300],
+                "content": snippet,
+                "chars": len(snippet),
+                "snippet_only": True,
+            }
+        )
+        if len(pages) >= limit:
+            break
+    return pages
+
+
 def _merge_hits(existing: list[dict[str, Any]], new_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按 URL 合并两轮检索结果；保留首轮顺序与原始 score。"""
     merged: list[dict[str, Any]] = []
@@ -387,12 +452,22 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
         retry_counts["search_web"] = retry_counts.get("search_web", 0) + max(0, result.attempts - 1)
         if result.ok:
             hits = list(result.data or [])
-            results.extend(hits)
+            # 视频站/搜索引擎聚合页抓不出正文：在合并前就剔掉，把抓取预算留给真页面
+            usable_hits = [
+                hit
+                for hit in hits
+                if isinstance(hit, dict) and not _is_junk_result_url(str(hit.get("url") or ""))
+            ]
+            dropped_junk = len(hits) - len(usable_hits)
+            results.extend(usable_hits)
             sl.add(
                 node_name="search_web",
                 tool_name="search_web",
                 input_summary=f"[第{round_no + 1}轮] {query}",
-                output_summary=f"{len(hits)} 条结果",
+                output_summary=(
+                    f"{len(usable_hits)} 条结果"
+                    + (f"（过滤 {dropped_junk} 条视频/搜索聚合页）" if dropped_junk else "")
+                ),
                 status="ok",
                 retry_count=max(0, result.attempts - 1),
                 latency_ms=result.latency_ms,
@@ -528,7 +603,7 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
             hit = candidates[cursor]
             cursor += 1
             url = str(hit.get("url") or "").strip()
-            if not url:
+            if not url or _is_junk_result_url(url):
                 continue
             host = (urlparse(url).hostname or "").lower()
             if host and host in failed_hosts:
@@ -638,14 +713,49 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
             output_summary="没有新的候选 URL 可抓取（本轮全部是已抓取页面）",
             status="skipped",
         )
-    if not pages:
-        sl.add(
-            node_name="fetch_pages",
-            input_summary=f"{len(candidates)} 个候选 URL",
-            output_summary="没有成功抓取任何页面，后续报告将标注“未找到可靠来源”",
-            status="degraded",
-            error="全部页面抓取失败",
+    if len(pages) < page_target:
+        # 页面不够时用搜索引擎摘要补齐：零页时不再交白卷，只有 1 页时也能多几条线索。
+        # 补入的页面带 snippet_only=True，报告会逐条/汇总标注“仅摘要、需复核原文”。
+        fetched_urls = {str(page.get("url") or "").strip() for page in pages}
+        candidates_for_snippet = [
+            hit
+            for hit in (state.get("search_results") or [])
+            if str(hit.get("url") or "").strip() not in fetched_urls
+        ]
+        fill_limit = (
+            max(1, page_target - len(pages))
+            if pages
+            else min(6, max(page_target, 3) + 2)
         )
+        snippet_pages = _snippet_pages(candidates_for_snippet, limit=fill_limit)
+        if snippet_pages:
+            pages.extend(snippet_pages)
+            if fetched_urls:
+                sl.add(
+                    node_name="fetch_pages",
+                    input_summary=f"正文页数不足（{len(fetched_urls)}/{page_target}）",
+                    output_summary=(
+                        f"补入 {len(snippet_pages)} 条搜索摘要（摘要级证据，未抓取正文；报告会标注需复核原文）"
+                    ),
+                    status="degraded",
+                )
+            else:
+                sl.add(
+                    node_name="fetch_pages",
+                    input_summary=f"{attempts} 个候选 URL 全部抓取失败",
+                    output_summary=(
+                        f"降级使用 {len(snippet_pages)} 条搜索摘要（摘要级证据，未抓取正文；报告会标注需复核原文）"
+                    ),
+                    status="degraded",
+                )
+        elif not pages:
+            sl.add(
+                node_name="fetch_pages",
+                input_summary=f"{len(candidates)} 个候选 URL",
+                output_summary="没有成功抓取任何页面，后续报告将标注“未找到可靠来源”",
+                status="degraded",
+                error="全部页面抓取失败",
+            )
     return sl.updates(fetched_pages=pages, errors=errors, retry_counts=retry_counts)
 
 
@@ -815,6 +925,8 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
         )
     web_pages = [page for page in pages if not page.get("is_kb")]
     kb_pages = [page for page in pages if page.get("is_kb")]
+    snippet_pages = [page for page in web_pages if page.get("snippet_only")]
+    snippet_only = bool(web_pages) and len(snippet_pages) == len(web_pages)
     sources = [
         {
             "url": str(page.get("url") or ""),
@@ -877,6 +989,18 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
     if kb_items:
         notes.append(f"知识库证据 {len(kb_items)} 条")
         raw_evidence.extend(kb_items)
+    if snippet_pages:
+        # 摘要级降级必须显式标注：这些证据只来自搜索结果摘要，没有抓取到正文。
+        snippet_urls = {str(page.get("url") or "").rstrip("/").lower() for page in snippet_pages}
+        for item in raw_evidence:
+            if isinstance(item, dict) and str(item.get("source_url") or "").rstrip("/").lower() in snippet_urls:
+                item["snippet_only"] = True
+        if snippet_only:
+            notes.append("未抓取到网页正文，证据来自搜索引擎摘要（摘要级，结论需打开原文复核）")
+        else:
+            notes.append(
+                f"其中 {len(snippet_pages)} 个来源未抓取到正文，证据仅来自搜索摘要（需打开原文复核）"
+            )
     # P0：claim 级校验——只保留“结论能被引文支持（或部分支持）”的证据，
     # 明显外推/无关的条目从证据列表移除并记录，避免进入报告。
     evidence, verification = verify_evidence(raw_evidence)
@@ -1668,6 +1792,9 @@ def finalize(state: ResearchState) -> dict[str, Any]:
         "evidence": evidence,
         "evidence_count": len(evidence),
         "evidence_note": state.get("evidence_note", ""),
+        # 证据是否只来自搜索摘要（正文抓取失败时的降级路径），前端会给出提示
+        "snippet_only": bool(evidence) and all(item.get("snippet_only") for item in evidence),
+        "snippet_evidence_count": sum(1 for item in evidence if item.get("snippet_only")),
         "sub_questions": list(plan.get("sub_questions") or []),
         "queries": list(plan.get("queries") or []),
         # 研究质量闭环：覆盖度、断言校验、实际检索轮次

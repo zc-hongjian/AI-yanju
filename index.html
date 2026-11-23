@@ -3654,6 +3654,11 @@
     const ver = final.verification || {};
     if (ver.total) chips.push("<span>支持率 " + Math.round((ver.support_rate || 0) * 100) + "%</span>");
     chips.push("<span>检索 " + (final.retrieval_rounds || 1) + " 轮</span>");
+    if (final.snippet_only) {
+      chips.push("<span class='warn'>证据仅来自搜索摘要 · 需复核原文</span>");
+    } else if ((final.snippet_evidence_count || 0) > 0) {
+      chips.push("<span class='warn'>含 " + final.snippet_evidence_count + " 条搜索摘要证据 · 需复核原文</span>");
+    }
     chips.push("<span>耗时 " + formatDuration(final.duration_ms) +
       ((final.hitl_wait_ms || 0) > 0 ? "（人工 " + formatDuration(final.hitl_wait_ms) + "）" : "") + "</span>");
     chips.push("<span>成本 ¥" + (final.cost_cny == null ? 0 : final.cost_cny) + (final.cost_estimated ? "（估算）" : "") + "</span>");

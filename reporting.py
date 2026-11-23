@@ -585,6 +585,12 @@ def limits_lines(evidence: Sequence[dict[str, Any]], uncovered: Sequence[str] = 
     promos = sum(1 for item in evidence if item.get("promo"))
     if promos:
         lines.append(f"- 有 {promos} 条证据属于营销/证言类表述，已降权，不作为主要结论依据。")
+    snippet_count = sum(1 for item in evidence if item.get("snippet_only"))
+    if snippet_count:
+        lines.append(
+            f"- 其中 {snippet_count} 条证据只来自搜索引擎摘要（本次未抓取到网页正文），"
+            "只能作为线索，结论需打开原文复核。"
+        )
     lines.append(f"- 标有{INFER_TAG}的内容是基于证据的推理，不是原文结论，也未做交叉验证。")
     lines.append("")
     return lines
