@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Iterable, Sequence
 
@@ -457,8 +458,284 @@ def _is_relevant(sentence: str, item: dict[str, Any]) -> bool:
     return bool(latin & {word.lower() for word in LATIN_RE.findall(text)})
 
 
-def validate_draft(draft: str, evidence: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """引用与结构的硬校验：返回 issues；passed=False 时应重写或程序修复。"""
+def _is_table_separator(line: str) -> bool:
+    stripped = line.strip()
+    return (
+        stripped.startswith("|")
+        and "-" in stripped
+        and set(stripped) <= set("|-: ")
+    )
+
+
+def has_markdown_table(text: str) -> bool:
+    """报告里是否有真正的 Markdown 表格（表头 + 分隔行 + 至少一行数据）。"""
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    for index in range(len(lines) - 1):
+        header, separator = lines[index].strip(), lines[index + 1].strip()
+        if not header.startswith("|") or not _is_table_separator(separator):
+            continue
+        if index + 2 < len(lines) and lines[index + 2].strip().startswith("|"):
+            return True
+    return False
+
+
+def _report_body(text: str) -> str:
+    """报告正文（去掉来源清单），用于字数统计。"""
+    body = str(text or "").split("## 来源清单", 1)[0]
+    return body.strip()
+
+
+def repeated_sentence_groups(
+    text: str, *, threshold: float = 0.9, min_chars: int = 14, max_groups: int = 3
+) -> list[dict[str, Any]]:
+    """找出“同一事实反复说”的句子组（≥3 句高度相似）。
+
+    只做词面近似判断（中文 bigram 重叠），用于提示“车轱辘话”；不做语义理解。
+    """
+    groups: list[dict[str, Any]] = []
+    for sentence in _sentences(_report_body(text)):
+        plain = normalize(sentence)
+        if len(plain) < min_chars:
+            continue
+        for group in groups:
+            if _overlap(plain, group["sample"]) >= threshold:
+                group["count"] += 1
+                break
+        else:
+            groups.append({"sample": plain, "count": 1})
+    repeated = [group for group in groups if group["count"] >= 3]
+    repeated.sort(key=lambda group: -group["count"])
+    return repeated[:max_groups]
+
+
+def _report_char_limit() -> int:
+    try:
+        return max(200, int(os.getenv("AGENT_REPORT_MAX_CHARS", "1000")))
+    except ValueError:
+        return 1000
+
+
+def report_char_limit() -> int:
+    """报告正文字数上限（不含来源清单），默认 1000。"""
+    return _report_char_limit()
+
+
+def report_chars(text: str) -> int:
+    """报告正文字数（去掉来源清单、引用链接 URL 与空白）。
+
+    统计口径是“人读的字数”：`[S1](https://...)` 里的 URL 不算字数，
+    否则渲染时自动加的可点击链接会把 800 字的报告算成 1400+。
+    """
+    body = _report_body(text)
+    body = re.sub(r"\((?:https?|ftp)://[^)\s]+\)", "", body)
+    body = re.sub(r"\[\^\d+\]", "", body)
+    return len(re.sub(r"\s+", "", body))
+
+
+def _split_sections(text: str) -> list[tuple[str | None, list[str]]]:
+    """按 ``## 标题`` 切分报告；第一段（无标题）用 ``None`` 表示。"""
+    sections: list[tuple[str | None, list[str]]] = []
+    title: str | None = None
+    lines: list[str] = []
+    for line in str(text or "").splitlines():
+        match = re.match(r"^##\s+(.+?)\s*$", line)
+        if match:
+            sections.append((title, lines))
+            title = match.group(1).strip()
+            lines = []
+        else:
+            lines.append(line)
+    sections.append((title, lines))
+    return sections
+
+
+def _section_has_table(lines: Sequence[str]) -> bool:
+    return has_markdown_table("\n".join(lines))
+
+
+def _keep_first_sentences(lines: Sequence[str], count: int) -> list[str]:
+    """保留前 count 句（按行内句子切分），丢掉多余解释。"""
+    kept: list[str] = []
+    used = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("|"):
+            kept.append(line)
+            continue
+        sentences = [part for part in _SENTENCE_SPLIT_RE.split(stripped) if part.strip()]
+        if used >= count:
+            continue
+        take = sentences[: count - used]
+        if take:
+            kept.append("".join(take).strip() if len(take) > 1 else take[0])
+            used += len(take)
+    return kept
+
+
+def _keep_table_block(lines: Sequence[str]) -> list[str]:
+    """只保留 Markdown 表格行（表头/分隔/数据），丢掉表格外的长解释。"""
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("|") or stripped.startswith("#"):
+            kept.append(line)
+        elif not kept and stripped:
+            kept.append(line)  # 表格前的一句引导
+    return kept
+
+
+def compact_report(
+    draft: str,
+    *,
+    limit: int | None = None,
+    max_summary_sentences: int = 3,
+    max_findings: int = 5,
+    max_inferences: int = 2,
+    max_section_sentences: int = 2,
+    strict: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
+    """把超长报告压到字数上限内（确定性后处理，不依赖模型配合）。
+
+    策略（按保留优先级）：
+    1. 摘要保留前 3 句、关键发现保留前 5 条、分析保留前 2 条推演、其他小节保留前 2 句；
+    2. 对比类报告只保留**一个**表格小节，重复的表格小节整体丢弃；
+    3. 全篇同一事实（近似句子）最多保留两次；
+    4. 仍超限时，从尾部删除非必需小节（摘要/关键发现/分析/局限保留）。
+    返回 (压缩后的文本, fixes)；不需要压缩时原样返回、fixes 为空。
+    """
+    target = limit or _report_char_limit()
+    text = str(draft or "")
+    if report_chars(text) <= target:
+        return text, []
+    body, marker, source = text.partition("## 来源清单")
+    fixes: list[dict[str, Any]] = []
+    required = {SUMMARY_TITLE, FINDINGS_TITLE, ANALYSIS_TITLE, LIMITS_TITLE}
+    sections = _split_sections(body)
+    kept_sections: list[tuple[str | None, list[str]]] = []
+    table_seen = False
+    table_titles: set[str] = set()
+    for title, lines in sections:
+        if title is None:
+            cleaned = [line for line in lines if line.strip()]
+            if cleaned:
+                kept_sections.append((None, cleaned))
+            continue
+        if title == LIMITS_TITLE:
+            kept_sections.append((title, lines))
+            continue
+        if title == SUMMARY_TITLE:
+            kept_sections.append((title, _keep_first_sentences(lines, max_summary_sentences)))
+            continue
+        if title == FINDINGS_TITLE:
+            bullets = [line for line in lines if line.strip().startswith(("- ", "* "))]
+            if len(bullets) > max_findings:
+                fixes.append({"code": "trimmed_findings", "detail": f"关键发现从 {len(bullets)} 条压到 {max_findings} 条"})
+            kept_sections.append((title, bullets[:max_findings]))
+            continue
+        if title == ANALYSIS_TITLE:
+            inferences = [line for line in lines if INFER_TAG in line or "推断" in line]
+            if len(inferences) > max_inferences:
+                fixes.append(
+                    {"code": "trimmed_inference", "detail": f"推演从 {len(inferences)} 条压到 {max_inferences} 条"}
+                )
+            kept_sections.append((title, inferences[:max_inferences]))
+            continue
+        if _section_has_table(lines):
+            if table_seen:
+                fixes.append({"code": "dropped_duplicate_table_section", "detail": f"删除重复表格小节：{title}"})
+                continue
+            table_seen = True
+            table_titles.add(title)
+            kept_sections.append((title, _keep_table_block(lines)))
+            continue
+        kept_sections.append((title, _keep_first_sentences(lines, max_section_sentences)))
+
+    # 同一事实全篇最多两次：按行做近似去重（表格与标题行不参与）
+    deduped: list[tuple[str | None, list[str]]] = []
+    history: list[str] = []
+    dropped_sentences = 0
+    for title, lines in kept_sections:
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("|"):
+                new_lines.append(line)
+                continue
+            plain = normalize(CITATION_RE.sub("", stripped))
+            if len(plain) >= 12 and sum(1 for item in history if _overlap(plain, item) >= 0.9) >= 2:
+                dropped_sentences += 1
+                continue
+            if len(plain) >= 12:
+                history.append(plain)
+            new_lines.append(line)
+        deduped.append((title, new_lines))
+    if dropped_sentences:
+        fixes.append({"code": "deduped_repeated_sentences", "detail": f"删除重复事实句 {dropped_sentences} 句"})
+
+    def render(items: list[tuple[str | None, list[str]]]) -> str:
+        chunks: list[str] = []
+        for title, lines in items:
+            block = "\n".join(lines).strip("\n")
+            if title is None:
+                if block.strip():
+                    chunks.append(block.strip())
+            elif block.strip():
+                chunks.append(f"## {title}\n\n{block.strip()}")
+        return "\n\n".join(chunks).strip()
+
+    rendered = render(deduped)
+    # 仍超限：从尾部丢非必需、且不是对比表格的小节
+    while report_chars(rendered) > target:
+        candidates = [
+            index
+            for index, (title, _lines) in enumerate(deduped)
+            if title is not None and title not in required and title not in table_titles
+        ]
+        if not candidates:
+            break
+        index = candidates[-1]
+        fixes.append({"code": "dropped_section", "detail": f"删除非必需小节：{deduped[index][0]}"})
+        deduped.pop(index)
+        rendered = render(deduped)
+    # 第二轮更激进：摘要 2 句、发现 3 条、推演 1 条、其他小节 1 句
+    if report_chars(rendered) > target and not strict:
+        further, extra_fixes = compact_report(
+            rendered,
+            limit=target,
+            strict=True,
+            max_summary_sentences=2,
+            max_findings=3,
+            max_inferences=1,
+            max_section_sentences=1,
+        )
+        fixes.extend(extra_fixes)
+        rendered = further
+    if report_chars(rendered) > target:
+        fixes.append(
+            {
+                "code": "still_over_limit",
+                "detail": f"压缩后仍约 {report_chars(rendered)} 字（目标 {target}）",
+            }
+        )
+    if marker:
+        rendered = rendered.rstrip() + "\n\n" + marker.strip() + source
+    return rendered.strip() + "\n", fixes
+
+
+def validate_draft(
+    draft: str,
+    evidence: Sequence[dict[str, Any]],
+    *,
+    question: str = "",
+    comparison: bool = False,
+) -> dict[str, Any]:
+    """引用与结构的硬校验：返回 issues；passed=False 时应重写或程序修复。
+
+    ``question`` 非空时额外校验篇幅 / 重复事实；``comparison=True`` 时要求对比表格。
+    （单测可以只传 draft/evidence，行为与旧版一致。）
+    """
     issues: list[dict[str, Any]] = []
     text = draft or ""
     total = len(evidence)
@@ -528,6 +805,20 @@ def validate_draft(draft: str, evidence: Sequence[dict[str, Any]]) -> dict[str, 
                     f"S{index}「{normalize(target.get('claim') or target.get('quote') or '')[:40]}」"
                     f"与句子「{normalize(sentence)[:40]}」无词面关联",
                 )
+
+    # 对比报告必须有表格（否则模型很容易写成两段泛泛而谈的散文）
+    if comparison and not has_markdown_table(text):
+        add("missing_comparison_table", "对比类报告缺少 Markdown 对比表格（维度 × A × B，至少 3 个维度）")
+    if question:
+        limit = _report_char_limit()
+        chars = report_chars(text)
+        if chars > limit:
+            add("report_too_long", f"正文约 {chars} 字，超过 {limit} 字上限，需要压缩")
+        for group in repeated_sentence_groups(text):
+            add(
+                "repeated_fact",
+                f"同一事实出现 {group['count']} 次（「{group['sample'][:30]}」），全文最多两次",
+            )
     return {
         "issues": issues[:40],
         "issue_count": len(issues),

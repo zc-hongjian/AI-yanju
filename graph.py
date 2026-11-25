@@ -80,6 +80,10 @@ def _draft_review_enabled() -> bool:
 
 COMPARISON_RE = re.compile(r"对比|比较|区别|差异|优劣|优缺点|哪个更|vs\b|VS\b", re.I)
 MULTIHOP_RE = re.compile(r"为什么|如何|怎么|步骤|流程|机制|原理|分别|哪些因素|前置条件", re.I)
+# 问题是否明确指向“本项目”：只有这种问题才允许项目内知识库参与外部产品对比
+PROJECT_CONTEXT_RE = re.compile(
+    r"本项目|我们项目|我们的项目|项目里|项目内|本仓库|本系统|这个项目|该项目的|我们团队|我们的方案|我们的设计|我们的实现"
+)
 OFFICIAL_HOST_HINTS = (
     "langchain.com",
     "langchain.cn",
@@ -231,6 +235,15 @@ def _sources_from_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             item["is_kb"] = True
         sources.append(item)
     return sources
+
+
+def _has_project_context(question: str, plan: dict[str, Any]) -> bool:
+    """问题是否明确在问“我们自己的项目/方案”，而不是外部产品的通用对比。"""
+    text = " ".join(
+        [str(question or "")]
+        + [str(item) for item in (plan or {}).get("sub_questions") or []]
+    )
+    return bool(PROJECT_CONTEXT_RE.search(text))
 
 
 def _page_target(state: ResearchState) -> int:
@@ -774,6 +787,18 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
     limit = max(1, int(os.getenv("AGENT_KB_TOP_K", "6")))
     pages = list(state.get("fetched_pages") or [])
     start = time.perf_counter()
+    # 防污染：问外部产品/技术选型（如 Chroma vs Milvus）时，本地项目文档不是这些产品的
+    # 通用结论来源，直接不召回；只有问题明确带“本项目/我们的方案”等上下文时才保留，
+    # 并在 Prompt 里要求“项目文档不得当外部产品结论”。
+    if prompts.is_comparison_question(question) and not _has_project_context(question, plan):
+        sl.add(
+            node_name="retrieve_knowledge",
+            input_summary=f"{len(queries)} 条查询",
+            output_summary="对比/外部产品问题：本地项目文档不作为通用结论依据，跳过知识库召回",
+            status="skipped",
+            latency_ms=_elapsed_ms(start),
+        )
+        return sl.updates(fetched_pages=pages, kb_hits=[])
     try:
         hits = rag.search_knowledge(queries, k=limit)
     except Exception as exc:  # noqa: BLE001 - 知识库故障不能拖垮研究主流程
@@ -855,6 +880,7 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
                 "chars": len(text),
                 "encoding": "utf-8",
                 "is_kb": True,
+                "source_scope": "project",
                 "kb_doc_id": hit.get("doc_id"),
                 "kb_chunk_id": hit.get("chunk_id"),
                 "score": hit.get("score"),
@@ -897,6 +923,8 @@ def _kb_evidence_items(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source_snippet": str(page.get("title") or "知识库片段")[:120],
                 "relevance_reason": f"知识库检索命中（score={score:.3f}）",
                 "confidence": round(min(0.9, 0.5 + min(0.35, score)), 2),
+                # 项目内文档：下游 Prompt 会把它当作“本项目做法”，不得当外部产品结论
+                "source_scope": "project",
             }
         )
     return items
@@ -1309,11 +1337,14 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
     """引用/结构硬校验：不达标先让模型最小改动重写一次，再程序修复兜底。
 
     校验项：引用编号存在、单句引用 ≤2、引用与句子相关、关键发现必须有引用、
-    摘要至少 2 句且有引用、必须有「分析与推演」和「局限与未证实」。
+    摘要至少 2 句且有引用、必须有「分析与推演」和「局限与未证实」；
+    对比问题必须有 Markdown 对比表格；正文 ≤AGENT_REPORT_MAX_CHARS（默认 1000 字）、
+    同一事实全文最多出现两次（超长/重复用确定性压缩，不再浪费一次模型重写）。
     """
     sl = StepLog(state)
     question = str(state.get("research_question") or "")
     evidence = list(state.get("evidence") or [])
+    comparison = prompts.is_comparison_question(question)
     sources = _sources_from_pages(state.get("fetched_pages") or [])
     outline = state.get("outline") or {}
     uncovered = [str(item) for item in outline.get("uncovered") or []]
@@ -1336,20 +1367,24 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
         )
         return sl.updates(draft_review=report)
 
-    first = reporting.validate_draft(raw, evidence)
+    first = reporting.validate_draft(raw, evidence, question=question, comparison=comparison)
     issues = list(first["issues"])
     rewrites = 0
     rejected = 0
     rewriter = getattr(get_llm(), "rewrite_draft", None)
-    if issues and MAX_DRAFT_REWRITES and callable(rewriter):
+    # 篇幅/重复问题交给确定性的 compact_report 处理，没必要再花一次模型调用；
+    # 只有结构/引用类问题（缺表格、缺小节、引用错误…）才值得让模型重写。
+    deterministic_only = {"report_too_long", "repeated_fact"}
+    need_rewrite = any(issue["code"] not in deterministic_only for issue in issues)
+    if issues and need_rewrite and MAX_DRAFT_REWRITES and callable(rewriter):
         best_raw, best_count = raw, len(issues)
         for _ in range(MAX_DRAFT_REWRITES):
-            before = reporting.validate_draft(best_raw, evidence)
+            before = reporting.validate_draft(best_raw, evidence, question=question, comparison=comparison)
             candidate = rewriter(question, best_raw, before["issues"])
             if not candidate or not candidate.strip():
                 break
             candidate = candidate.strip()
-            count = len(reporting.validate_draft(candidate, evidence)["issues"])
+            count = len(reporting.validate_draft(candidate, evidence, question=question, comparison=comparison)["issues"])
             rewrites += 1
             if count < best_count:
                 best_raw, best_count = candidate, count
@@ -1362,7 +1397,12 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
                 break
         raw = best_raw
     raw, fixes = reporting.repair_draft(raw, evidence, uncovered=uncovered)
-    final = reporting.validate_draft(raw, evidence)
+    # 字数硬约束：模型经常忽略“≤1000 字”，这里用确定性后处理压到上限内
+    # （保留必需小节与最多一个对比表格，重复事实最多两次）。
+    if reporting.report_chars(raw) > reporting.report_char_limit():
+        raw, trim_fixes = reporting.compact_report(raw)
+        fixes.extend(trim_fixes)
+    final = reporting.validate_draft(raw, evidence, question=question, comparison=comparison)
     draft, dropped_urls = _sanitize_report(raw, sources, evidence)
     errors = list(state.get("errors") or [])
     if dropped_urls:
@@ -1385,6 +1425,8 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
                 "checked_citations": final["checked_citations"],
                 "remaining_issues": final["issue_count"],
                 "evidence_total": len(evidence),
+                "comparison": comparison,
+                "report_chars": len(re.sub(r"\s+", "", raw.split("## 来源清单", 1)[0])),
             },
         }
     )

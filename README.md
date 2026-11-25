@@ -5,7 +5,7 @@
 >
 > 14 节点 LangGraph 图 · 3 次 human-in-the-loop · 引用可回溯 · 断点恢复 · 可观测 Trace/成本 · 本地知识库 RAG
 
-**当前状态**：252 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
+**当前状态**：262 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
 
 ---
 
@@ -181,6 +181,9 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 | 会话持久化与多轮 | SQLite checkpointer 断点恢复 + 会话索引；`parent_thread_id` 注入上一轮结论（≤1200 字） |
 | 可观测 | 节点 Span（耗时/token/成本）、价目表最长前缀匹配、未知模型标「估算」、`/api/trace` 与成本汇总 |
 | 知识库 RAG | 标题分块（800/120 重叠）→ BM25（中文 bigram）→ 可选向量 → RRF；无 Key 自动降级 BM25 |
+| 知识库防污染 | 外部产品/对比问题默认不召回本地项目文档（问题带“本项目/我们的方案”才保留）；证据标注「本地项目文档」，Prompt 禁止把它当外部产品的通用结论 |
+| 对比报告 | 对比/选型类问题自动注入专属指令：强制 Markdown 对比表格（≥3 个维度）、禁止张冠李戴、冲突要官方与第三方两说、缺证据写「证据不足」；缺表格会被 `draft_review` 判不合格 |
+| 篇幅与去重 | Prompt 约束正文 ≤1000 字、同一事实全文最多两次；`draft_review` 记 `report_too_long` / `repeated_fact` 并触发压缩重写 |
 | 性能 | 搜索/抓取 TTL 缓存（默认 24h）+ 并发抓取（默认 3）：同一问题二次运行实测 23.8s → 3.4s；报告分节并发写作（默认 3）；LLM 长输出单独超时分档，超时不再被重试放大（一次 30s 曾被放大成 121s，证据提取因此从 121s 降到 33s）；总耗时拆成「计算」与「人工确认等待」展示；真实 LLM 端到端实测 48.4s（3 页、1 轮） |
 | 写操作可靠性 | 写操作审计表 + 幂等键：同一运行里重复执行不会重复发邮件/重复写 Notion；失败允许重试 |
 | 交付物 | Markdown / Word（`.docx`）/ 打印 PDF / 报告阅读页 / 多轮报告 diff / 历史检索 / 成本看板 |
@@ -310,6 +313,8 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 | `AGENT_MOJIBAKE_RATIO` | 乱码段落丢弃阈值，默认 0.3 |
 | `AGENT_LLM_TIMEOUT` / `AGENT_LLM_TIMEOUT_LONG` | 单次 LLM 超时 30s / 长输出调用 75s（超时不再叠加格式回退重试） |
 | `AGENT_DRAFT_CONCURRENCY` | 报告分节并发度，默认 3（夹取 1~4） |
+| `AGENT_REPORT_MAX_CHARS` | 报告正文字数上限，默认 1000（超出记 `report_too_long` 并压缩） |
+| `AGENT_DRAFT_REVIEW` | 草稿引用/结构校验开关，默认 1（含对比表格、篇幅、重复事实检查） |
 | `AGENT_PRICE_INPUT_PER_MTOK` / `AGENT_PRICE_OUTPUT_PER_MTOK` | token 单价（元/百万），1.0 / 4.0 |
 | `AGENT_LINK_CITATIONS` | `[S#]` 是否可点击，默认 1；0 用于消融 |
 | `AGENT_PLAN_SUB_QUESTIONS` | 是否生成子问题，默认 1；0 用于消融 |
@@ -369,7 +374,7 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 ## 测试与验收
 
 ```bash
-pytest -q                              # 252 passed
+pytest -q                              # 262 passed
 python evaluation/acceptance_check.py  # 9/9（生成 FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ```
@@ -383,7 +388,7 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 | [原型图/](原型图/) | 22 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 41 个测试文件 / 252 用例 |
+| [tests/](tests/) | 42 个测试文件 / 262 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 

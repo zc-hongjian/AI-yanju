@@ -432,3 +432,35 @@ AutoGen 靠检查点回放状态”；「分析与推演」每条带【推断】
 **遗留**：摘要只有 40~120 字，信息密度低于正文；`check_coverage` 仍按词面判断，
 会出现“有证据但覆盖 0/5”的保守结果（宁可少报覆盖）。提升方向是更可靠的抓取通道
 （官方搜索 API / 可用的 reader 代理）以及把摘要与子问题做语义匹配，而不是放宽规则。
+
+## 16. 实施记录（Prompt 护栏：知识库防污染 / 对比矩阵 / 篇幅与重复，2026-11-25）
+
+三条用户反馈对应三类可复现问题：
+
+1. **知识库污染**：问“Chroma vs Milvus”时本地 `knowledge/` 的项目文档（RAG 设计、评测指标）
+   被召回，模型把“本项目怎么设计”写成“Chroma/Milvus 的能力”；
+2. **对比报告质量差**：没有表格、A/B 属性张冠李戴、官方与第三方冲突不解释、大量空评价；
+3. **又长又重复**：同一事实在摘要/发现/推演里反复出现，报告 5000+ 字符。
+
+### 修复
+
+| 修复 | 实现 | 验证 |
+| --- | --- | --- |
+| 外部产品/对比问题跳过本地知识库 | `retrieve_knowledge`：`prompts.is_comparison_question(question)` 且问题没有“本项目/我们的方案”等上下文 → 直接 `skipped`（日志写明原因）；保留时页面/证据打 `source_scope=project` | `test_prompt_guards.py`（外部对比跳过、项目上下文保留并标记） |
+| Prompt 禁止项目文档当外部结论 | 六个系统提示词追加 `KB_SCOPE_RULE`；证据块来源后标注「（本地项目文档，仅代表本项目做法）」 | 同上（prompt 包含规则、证据块标注） |
+| 对比报告专属指令 | `prompts.comparison_instructions()` 注入 `outline_user` / `draft_user` / `draft_section_user`：强制表格（≥3 维度）、禁止身份混淆、冲突消解、拒绝废话、缺证据标注 | 非对比问题不注入（单测）；真实运行生成对比表格 |
+| 对比报告缺表格判不合格 | `reporting.has_markdown_table` + `validate_draft(comparison=True)` → `missing_comparison_table`；`REWRITE_SYSTEM` 要求补表格 | 单测（无表格报错、有表格通过） |
+| 篇幅与重复 | Prompt：正文 ≤1000 字、同一事实最多两次；`validate_draft(question=...)` 记 `report_too_long` / `repeated_fact`；**确定性压缩** `compact_report()`：分节按句数/条数裁剪、重复表格只留一个、重复事实句最多两次、超限删非必需小节（保留摘要/关键发现/分析/局限与对比表格）；字数统计剔除引用 URL | 单测（压缩后 ≤ 上限、必需小节与唯一表格保留、重复小节被删） |
+
+### 实测
+
+真实运行 `Chroma vs Milvus`（`trace_id=58156c70`，glm-4-flash + 真实联网）：
+- 两轮 `retrieve_knowledge` 都因“对比/外部产品问题”跳过知识库；
+- 大纲 8 节（含「对比矩阵」），草稿 4627 字符 → `draft_review` 5 个问题、重写 1 次、修复 8 处；
+- `compact_report` 删除 3 个重复表格小节、压缩发现/推演，最终正文 **806 字**（不含链接 URL），
+  保留 1 个对比表格，`status=passed`；
+- 对照修复前同题运行（`trace_id=7d70db4a`）：5342 字符、4 个重复表格。
+
+**遗留**：表格内容正确性仍取决于证据质量（本次抓到的页面并非 Chroma/Milvus 官方文档，
+模型会照着弱证据填表，需要更强的来源选择）；冲突消解目前靠 Prompt，没有程序化“矛盾检测”
+（要检测“同一指标两个值”需要先做指标实体抽取，属于下一步）。
