@@ -20,6 +20,65 @@ def is_comparison_question(question: str) -> bool:
     return bool(COMPARISON_PATTERN.search(str(question or "")))
 
 
+CONTROVERSY_PATTERN = re.compile(
+    r"争议|争论|分歧|是否会|会不会|取代|替代|泡沫|利弊|正方|反方|支持者|反对者|质疑|"
+    r"趋势|走向|前景|未来|看法|观点|是否会|会不会|杀死|颠覆",
+    re.I,
+)
+MARKET_PATTERN = re.compile(
+    r"市场规模|市场份额|市场分析|行业分析|行业研究|竞争格局|主要玩家|玩家|营收|收入|增长率|"
+    r"CAGR|市场预测|渗透率|估值|融资|商业模式|商业化|赛道|定价|GMV|用户规模",
+    re.I,
+)
+# 真正的“市场数据”强信号：避免“赛道/趋势”这种争议类问题被误判成市场分析
+MARKET_STRONG_PATTERN = re.compile(
+    r"市场规模|市场份额|份额|营收|收入|增长率|CAGR|玩家|竞争格局|渗透率|估值|融资|GMV|用户规模|市场预测",
+    re.I,
+)
+
+
+def is_controversy_question(question: str) -> bool:
+    """争议/趋势/观点碰撞类问题。"""
+    return bool(CONTROVERSY_PATTERN.search(str(question or "")))
+
+
+def is_market_question(question: str) -> bool:
+    """商业与市场分析类问题（规模/份额/玩家/增长）。争议+泛趋势问题不算市场分析。"""
+    text = str(question or "")
+    if not MARKET_PATTERN.search(text):
+        return False
+    if CONTROVERSY_PATTERN.search(text) and not MARKET_STRONG_PATTERN.search(text):
+        return False
+    return True
+
+
+def controversy_instructions(question: str) -> str:
+    """争议/趋势类问题专用的写作指令。"""
+    if not is_controversy_question(question):
+        return ""
+    return """
+【争议/趋势报告专属指令】（本次问题涉及争议或趋势，必须严格遵守）
+1. 必须写清「争议焦点」，并分别给「支持方观点」与「反对方观点」，每一方都要有引用 [S#]。
+2. 若只找到一方公开观点，明确写「未找到另一方公开观点」，不得编造平衡、不得伪造共识。
+3. 区分事实与观点：引用原文主张时写成「某来源认为 / 有观点认为」，不要写成客观事实。
+4. 给出证据强度：来源类型（官方/研报/媒体/博客）、是否有数据、是否单一来源。
+5. 趋势判断必须基于证据并注明前提；没有证据的方向写「证据不足，不作判断」。"""
+
+
+def market_instructions(question: str) -> str:
+    """市场分析类问题专用的写作指令。"""
+    if not is_market_question(question):
+        return ""
+    return """
+【市场分析报告专属指令】（本次问题涉及市场数据，必须严格遵守）
+1. 必须包含一个数据表，列至少为「指标 | 数值 | 年份 | 口径/范围 | 来源」，每个数值必须带 [S#] 角标。
+2. 数字必须带年份与口径（例如「2030 年 / 中国网络安全 AI Agent」）；不得把细分市场数字当成整体市场，
+   不得把预测值写成实际值，不得把其他年份的数字改写成问题年份。
+3. 分节建议：市场规模与数据 / 主要玩家与竞争格局 / 增长驱动因素 / 风险与不确定性。
+4. 找不到的数据明确写「公开证据未提供」，不得用常识补数字；没有份额数据就写「份额数据未找到」，不要编排名。
+5. 同一指标有多个来源/口径时，列表写清每个数字对应的年份与口径，不要混成一个数。"""
+
+
 # 本地知识库证据的作用域约束：项目内文档不能当外部产品结论
 KB_SCOPE_RULE = """【本地知识库使用规则】
 - 来源以 `kb://` 开头、或证据里标注「本地项目文档」的，是本项目自己的设计/实现记录；
@@ -99,9 +158,13 @@ SUMMARIZE_SYSTEM = """你是一个严谨的研究助理。你的任务是从给�
 4. 保留代码或 API 名：如果涉及具体函数（如 `interrupt`），必须在 quote 中完整保留。
 5. 必须带出处：每条证据都要给出 source_url（必须原样来自 sources）和 source_snippet（网页中的小标题或段落定位，如“小标题二 / 第 3 段”）。
 6. 只能使用 sources 提供的正文，禁止引入外部知识；quote 必须逐字摘录，不得改写、拼接或翻译。
+7. claim / evidence_text 一律用**中文概括**；英文来源也要翻成中文写 claim，但 quote 必须保留英文原文逐字。
+8. 有明确立场（支持/反对/中立）时填 stance；纯事实描述可留空。
+9. 涉及数字时，numbers 里列出「数值|单位|年份|口径」，例如 "593.5亿元|2030|中国网络安全"；没有数字就空数组。
+10. 词典/翻译/产品首页这类页面不要提取；正文只是泛泛介绍、没有具体 API/参数/代码/数据时，直接返回空数组。
 
 只输出严格 JSON，用 evidence 数组包一层（便于逐条校验来源）：
-{"evidence": [{"evidence_text": "完整的原文句子", "quote": "逐字原文", "source_url": "https://...", "source_snippet": "小标题或段落定位", "relevance_reason": "为什么这段能回答用户问题", "confidence": 0.0}], "note": "没有证据时说明原因"}
+{"evidence": [{"claim": "中文概括", "evidence_text": "中文概括", "quote": "逐字原文", "source_url": "https://...", "source_snippet": "小标题或段落定位", "relevance_reason": "为什么这段能回答用户问题", "stance": "支持/反对/中立/空", "numbers": ["593.5亿元|2030|中国网络安全"], "confidence": 0.0}], "note": "没有证据时说明原因"}
 confidence 取 0~1，表示该证据对研究问题的支持强度。"""
 
 
@@ -167,13 +230,30 @@ def _scope_label(item: dict[str, Any]) -> str:
     return ""
 
 
+def _evidence_meta(item: dict[str, Any]) -> str:
+    """证据卡片上的元信息：来源类型 / 立场 / 数字口径。"""
+    parts: list[str] = []
+    source_type = str(item.get("source_type") or "").strip()
+    if source_type:
+        parts.append(f"来源类型: {source_type}")
+    stance = str(item.get("stance") or "").strip()
+    if stance:
+        parts.append(f"立场: {stance}")
+    numbers = item.get("numbers") or []
+    if isinstance(numbers, list) and numbers:
+        parts.append("数字: " + "；".join(str(value) for value in numbers[:4]))
+    return " | ".join(parts)
+
+
 def evidence_block(evidence: Iterable[dict[str, Any]]) -> str:
     parts: list[str] = []
     for idx, item in enumerate(evidence, start=1):
+        meta = _evidence_meta(item)
         parts.append(
             f"[S{idx}] claim: {item.get('claim', '')}\n"
-            f"    来源: {item.get('source_url', '')}{_scope_label(item)}\n"
-            f"    定位: {item.get('source_snippet', '')}\n"
+            f"    来源: {item.get('source_url', '')}{_scope_label(item)}"
+            + (f"\n    {meta}" if meta else "")
+            + f"\n    定位: {item.get('source_snippet', '')}\n"
             f"    原文: {item.get('quote', '')}\n"
             f"    相关性: {item.get('relevance_reason', '')}\n"
             f"    置信度: {item.get('confidence', 0)}"
@@ -198,11 +278,13 @@ def numbered_evidence_block(
     parts: list[str] = []
     for index in chosen:
         item = items[index - 1]
+        meta = _evidence_meta(item)
         parts.append(
             f"[S{index}] claim: {item.get('claim', '')}\n"
             f"    类型: {item.get('kind', '事实')}\n"
-            f"    来源: {item.get('source_url', '')}{_scope_label(item)}\n"
-            f"    原文: {item.get('quote', '')}\n"
+            f"    来源: {item.get('source_url', '')}{_scope_label(item)}"
+            + (f"\n    {meta}" if meta else "")
+            + f"\n    原文: {item.get('quote', '')}\n"
             f"    置信度: {item.get('confidence', 0)}"
         )
     return "\n\n".join(parts) if parts else "（本节没有可用证据）"
@@ -223,7 +305,7 @@ def draft_user(
 【来源类型】source_url 以 `kb://` 开头的是**本地项目文档**（只说明本项目怎么设计/取舍，
 不能当作外部产品/框架/库的通用能力或行业事实）；`https://` 开头的是本次联网抓取的网页，
 外部产品特性/时效性内容优先引用网页。
-{comparison_instructions(question)}
+{comparison_instructions(question)}{controversy_instructions(question)}{market_instructions(question)}
 请按撰写要求输出 Markdown 研究报告（正文 ≤1000 字，同一事实全文最多出现两次），
 只输出「摘要 / 关键发现 / 局限与未证实」三个小节。"""
 
@@ -302,7 +384,11 @@ OUTLINE_SYSTEM = """你是一个资深的技术研究报告主编。给定研究
 5. goal 用一句话写清“这一节要回答什么、写到什么程度”，不要写成标题的重复。
 6. 若问题是对比/选型类（A vs B、区别、哪个更好），必须包含一节「对比矩阵」：
    该节 goal 写明“输出 Markdown 表格（维度 × A × B，至少 3 个维度）”，并排在「关键发现」之后。
-7. """ + KB_SCOPE_RULE + """
+7. 若问题是争议/趋势类，必须包含「争议焦点」「支持方观点」「反对方观点」三节（可合并为“观点与依据”一节但必须正反都写），
+   并单独一节「趋势判断」。
+8. 若问题是市场分析类，必须包含「市场规模与数据」「主要玩家与竞争格局」「增长驱动因素」「风险与不确定性」四节；
+   「市场规模与数据」的 goal 要写明“输出 Markdown 数据表（指标 | 数值 | 年份 | 口径/范围 | 来源）”。
+9. """ + KB_SCOPE_RULE + """
 
 只输出严格 JSON：
 {"sections": [{"title": "节标题", "goal": "这一节的写作目标", "evidence_ids": [1, 3], "sub_question": "对应的子问题或空串"}]}"""
@@ -332,7 +418,7 @@ def outline_user(
 
 【证据卡片】：
 {chr(10).join(cards) if cards else "（无证据）"}
-{comparison_instructions(question)}
+{comparison_instructions(question)}{controversy_instructions(question)}{market_instructions(question)}
 请设计大纲并输出 JSON。"""
 
 
@@ -373,7 +459,7 @@ def draft_section_user(
 
 【本节可用证据】（编号即引用角标，只能使用这些编号）：
 {cards}
-{comparison_instructions(question)}
+{comparison_instructions(question)}{controversy_instructions(question)}{market_instructions(question)}
 请只输出本节正文（Markdown，不要标题行；本节 ≤250 字，不重复前面小节已写事实）。"""
 
 
@@ -457,7 +543,11 @@ REWRITE_SYSTEM = """你是一个资深的技术报告编辑。给定一份研究
    单元格结论带 [S#] 角标；同时保留原有小节结构。
 9. 若正文超过 1000 字、或同一个事实出现超过 2 次：压缩解释、删掉重复句（摘要一次 + 正文一次即可），
    不得靠删引用或删整节来降字数。
-10. """ + KB_SCOPE_RULE
+10. 报告中每个带单位的数字都必须能在证据里找到；证据没有的数字（包括改年份、改口径）必须删掉或改写为
+   “证据未给出该数据”，禁止用推算数冒充证据。
+11. 争议类问题必须保留正反两方观点；市场类问题必须保留带“年份/口径”的数据表和引用；
+   缺失时按问题类型补齐，不得用常识编造。
+12. """ + KB_SCOPE_RULE
 
 
 def rewrite_user(question: str, draft: str, issues: Iterable[dict[str, Any]]) -> str:

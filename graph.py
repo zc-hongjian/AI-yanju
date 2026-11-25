@@ -321,12 +321,31 @@ def _content_fingerprint(content: str) -> str:
     return hashlib.md5(compact.encode("utf-8", errors="ignore")).hexdigest()
 
 
-# 搜索结果里的视频站/搜索引擎聚合页/跳转页：抓不出正文，只会浪费有限的抓取预算
-JUNK_RESULT_HOSTS = {"tv.360kan.com", "m.tv.360kan.com", "ai.so.com"}
+# 搜索结果里的视频站/搜索引擎聚合页/词典翻译页：抓不出正文或没有研究价值，
+# 只会浪费有限的抓取预算并污染证据（实测问“争议”会抓回爱词霸/剑桥词典的 controversy 词条）。
+JUNK_RESULT_HOSTS = {
+    "tv.360kan.com",
+    "m.tv.360kan.com",
+    "ai.so.com",
+    "iciba.com",
+    "dict.youdao.com",
+    "fanyi.youdao.com",
+    "dictionary.cambridge.org",
+    "dictionary.com",
+    "thesaurus.com",
+    "merriam-webster.com",
+    "collinsdictionary.com",
+    "oxfordlearnersdictionaries.com",
+    "fanyi.baidu.com",
+    "dict.baidu.com",
+    "translate.google.com",
+    "translate.google.cn",
+    "deepl.com",
+}
 
 
 def _is_junk_result_url(url: str) -> bool:
-    """判断搜索结果 URL 是否是“看起来像网页、实际不可用”的聚合/搜索页。"""
+    """判断搜索结果 URL 是否是“看起来像网页、实际不可用/无研究价值”的聚合、词典页。"""
     raw = str(url or "").strip()
     if not raw.startswith(("http://", "https://")):
         return True
@@ -336,17 +355,29 @@ def _is_junk_result_url(url: str) -> bool:
         return True
     host = (parsed.hostname or "").lower()
     path = (parsed.path or "").lower()
+    query = (parsed.query or "").lower()
     if not host:
         return True
-    if host in JUNK_RESULT_HOSTS or host.endswith("360kan.com"):
+    if host in JUNK_RESULT_HOSTS or any(host.endswith("." + item) for item in JUNK_RESULT_HOSTS):
         return True
-    if host.endswith("so.com") and "/search" in path:
+    if host.endswith("360kan.com"):
+        return True
+    if host.endswith("so.com") and (path.startswith("/s") or "/search" in path):
         return True
     if host.endswith("bing.com") and "/search" in path:
         return True
     if host.endswith("baidu.com") and path.startswith("/s"):
         return True
-    if host.endswith("google.com") and path.startswith("/search"):
+    if host.endswith("google.com") and "/search" in path:
+        return True
+    if host.endswith("zhihu.com") and path.startswith("/search"):
+        return True
+    if host.endswith("sogou.com") and path.startswith("/web"):
+        return True
+    if "translate" in host or "/translate" in path or "/fanyi" in path:
+        return True
+    if query and any(key in query for key in ("wd=", "q=", "query=")) and path in ("", "/"):
+        # 搜索跳转页：只有域名 + 查询参数，没有可研究正文
         return True
     return False
 
@@ -480,6 +511,96 @@ def _ensure_how_queries(
     return deduped[:MAX_QUERIES]
 
 
+def _has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+RESEARCH_HOST_HINTS = (
+    "idc",
+    "gartner",
+    "mckinsey",
+    "forrester",
+    "iresearch",
+    "analysys",
+    "eastmoney",
+    "36kr",
+    "huxiu",
+    "tmtpost",
+    "report",
+)
+MEDIA_HOST_HINTS = (
+    "sina.com",
+    "sohu.com",
+    "163.com",
+    "ifeng.com",
+    "toutiao.com",
+    "qq.com",
+    "thepaper.cn",
+    "jiemian.com",
+    "caixin.com",
+    "yicai.com",
+    "people.com.cn",
+    "xinhuanet.com",
+    "cnstock.com",
+    "stcn.com",
+)
+
+
+def _source_type(url: str) -> str:
+    """证据来源类型：official / research / media / project / other，供报告判断证据强度。"""
+    raw = str(url or "").lower()
+    if raw.startswith("kb://"):
+        return "project"
+    host = (urlparse(raw).hostname or "").lower()
+    if not host:
+        return "other"
+    if any(hint in host for hint in OFFICIAL_HOST_HINTS) or host.endswith((".gov", ".edu", ".gov.cn")):
+        return "official"
+    if any(hint in host for hint in RESEARCH_HOST_HINTS):
+        return "research"
+    if any(hint in host for hint in MEDIA_HOST_HINTS):
+        return "media"
+    return "other"
+
+
+def _ensure_intent_queries(
+    question: str, queries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """争议/市场类问题补意图词，并让中文问题至少有一条中文查询。
+
+    实测中文问题被规划成纯英文 “controversies in AI Agent SaaS 2027” 时，
+    搜索引擎会返回词典/翻译页；这里只做保守纠偏（保留模型查询，补一条中文意图查询）。
+    """
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in queries:
+        query = str((item or {}).get("query") or "").strip()
+        key = query.lower()
+        if not query or key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(item))
+    if not merged:
+        merged = [{"query": question, "max_results": 5}]
+    if _has_cjk(question) and not any(_has_cjk(str(item.get("query") or "")) for item in merged):
+        merged[0] = {**merged[0], "query": question}
+    intent = ""
+    if prompts.is_market_question(question):
+        intent = "市场规模 份额 行业报告 数据"
+    elif prompts.is_controversy_question(question):
+        intent = "争议 观点 分析 趋势"
+    if intent:
+        haystack = " ".join(str(item.get("query") or "").lower() for item in merged)
+        if not any(term in haystack for term in intent.split()):
+            base = str(merged[0].get("query") or question)
+            candidate = {"query": f"{base} {intent}", "max_results": 5}
+            if len(merged) < MAX_QUERIES:
+                merged.append(candidate)
+            else:
+                merged[-1] = candidate
+    return merged[:MAX_QUERIES]
+
+
 def _merge_hits(existing: list[dict[str, Any]], new_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按 URL 合并两轮检索结果；保留首轮顺序与原始 score。"""
     merged: list[dict[str, Any]] = []
@@ -540,6 +661,7 @@ def plan_research(state: ResearchState) -> dict[str, Any]:
         errors.append({"node": "plan_research", "type": "llm_error", "error": str(exc)})
     # How 类问题：保证「代码示例 + 官方站 site:」两类查询（site: 0 结果时搜索节点会自动回退）
     plan["queries"] = _ensure_how_queries(question, list(plan.get("queries") or []))
+    plan["queries"] = _ensure_intent_queries(question, list(plan.get("queries") or []))
     latency = _elapsed_ms(start)
     queries = plan.get("queries") or []
     sub_questions = plan.get("sub_questions") or []
@@ -996,6 +1118,34 @@ def retrieve_knowledge(state: ResearchState) -> dict[str, Any]:
             filtered.append(hit)
     dropped = len(hits) - len(filtered)
     hits = filtered
+    # 外部/通用问题（行业、市场、争议、趋势…）：项目文档即使正文有词面交集也不该参与，
+    # 只保留标题/小节名命中问题词的片段（例如问 LangGraph 人工中断，命中同名文档）。
+    # 纯技术问题（如“没有 embedding Key 知识库还能用吗”）仍走正文词面门槛，
+    # 因为 RAG/BM25 这类技术概念本来就会出现在项目设计文档里。
+    external_topic = (
+        prompts.is_market_question(question) or prompts.is_controversy_question(question)
+    )
+    if hits and external_topic and not _has_project_context(question, plan):
+        title_hits = []
+        for hit in hits:
+            heading_text = f"{hit.get('title') or ''} {hit.get('heading') or ''}".lower()
+            if any(term in heading_text for term in strong | light):
+                title_hits.append(hit)
+        if len(title_hits) < len(hits):
+            title_dropped = len(hits) - len(title_hits)
+            dropped += title_dropped
+            hits = title_hits
+            if hits:
+                sl.add(
+                    node_name="retrieve_knowledge",
+                    input_summary=f"{len(queries)} 条查询；{stats['documents']} 篇文档",
+                    output_summary=(
+                        f"外部/通用问题：只保留标题命中的 {len(hits)} 个知识库片段"
+                        f"（过滤 {title_dropped} 个仅正文词面命中的片段）"
+                    ),
+                    status="skipped",
+                    latency_ms=_elapsed_ms(start),
+                )
     if not hits:
         sl.add(
             node_name="retrieve_knowledge",
@@ -1069,6 +1219,7 @@ def _kb_evidence_items(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "confidence": round(min(0.9, 0.5 + min(0.35, score)), 2),
                 # 项目内文档：下游 Prompt 会把它当作“本项目做法”，不得当外部产品结论
                 "source_scope": "project",
+                "source_type": "project",
             }
         )
     return items
@@ -1173,6 +1324,10 @@ def summarize_sources_node(state: ResearchState) -> dict[str, Any]:
             notes.append(
                 f"其中 {len(snippet_pages)} 个来源未抓取到正文，证据仅来自搜索摘要（需打开原文复核）"
             )
+    # 证据来源类型：official / research / media / project，供报告写“证据强度”与数字口径判断
+    for item in raw_evidence:
+        if isinstance(item, dict):
+            item["source_type"] = _source_type(str(item.get("source_url") or ""))
     # P0：claim 级校验——只保留“结论能被引文支持（或部分支持）”的证据，
     # 明显外推/无关的条目从证据列表移除并记录，避免进入报告。
     evidence, verification = verify_evidence(raw_evidence)
@@ -1489,6 +1644,8 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
     question = str(state.get("research_question") or "")
     evidence = list(state.get("evidence") or [])
     comparison = prompts.is_comparison_question(question)
+    controversy = prompts.is_controversy_question(question)
+    market = prompts.is_market_question(question)
     sources = _sources_from_pages(state.get("fetched_pages") or [])
     outline = state.get("outline") or {}
     uncovered = [str(item) for item in outline.get("uncovered") or []]
@@ -1511,7 +1668,22 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
         )
         return sl.updates(draft_review=report)
 
-    first = reporting.validate_draft(raw, evidence, question=question, comparison=comparison)
+    # 确定性防幻觉：先删掉“证据里不存在的数字”句/表格行、无引用表格行，
+    # 再交给引用校验（避免模型把 2030 的细分数字写成 2027 的整体规模）。
+    raw, number_fixes = reporting.scrub_unsupported_numbers(raw, evidence, question)
+    raw, year_fixes = reporting.scrub_year_number_mismatches(raw, evidence)
+    raw, table_fixes = reporting.scrub_uncited_table_rows(raw)
+    pre_fixes = number_fixes + year_fixes + table_fixes
+    if market or controversy:
+        raw, claim_fixes = reporting.scrub_uncited_claims(raw, market=market, controversy=controversy)
+        pre_fixes.extend(claim_fixes)
+    if market:
+        raw, market_table_fixes = reporting.ensure_market_table(raw, evidence)
+        pre_fixes.extend(market_table_fixes)
+    if controversy:
+        raw, balance_fixes = reporting.ensure_controversy_balance(raw)
+        pre_fixes.extend(balance_fixes)
+    first = reporting.validate_draft(raw, evidence, question=question, comparison=comparison, controversy=controversy, market=market)
     issues = list(first["issues"])
     rewrites = 0
     rejected = 0
@@ -1523,12 +1695,12 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
     if issues and need_rewrite and MAX_DRAFT_REWRITES and callable(rewriter):
         best_raw, best_count = raw, len(issues)
         for _ in range(MAX_DRAFT_REWRITES):
-            before = reporting.validate_draft(best_raw, evidence, question=question, comparison=comparison)
+            before = reporting.validate_draft(best_raw, evidence, question=question, comparison=comparison, controversy=controversy, market=market)
             candidate = rewriter(question, best_raw, before["issues"])
             if not candidate or not candidate.strip():
                 break
             candidate = candidate.strip()
-            count = len(reporting.validate_draft(candidate, evidence, question=question, comparison=comparison)["issues"])
+            count = len(reporting.validate_draft(candidate, evidence, question=question, comparison=comparison, controversy=controversy, market=market)["issues"])
             rewrites += 1
             if count < best_count:
                 best_raw, best_count = candidate, count
@@ -1541,12 +1713,28 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
                 break
         raw = best_raw
     raw, fixes = reporting.repair_draft(raw, evidence, uncovered=uncovered)
+    fixes = pre_fixes + fixes
     # 字数硬约束：模型经常忽略“≤1000 字”，这里用确定性后处理压到上限内
     # （保留必需小节与最多一个对比表格，重复事实最多两次）。
     if reporting.report_chars(raw) > reporting.report_char_limit():
         raw, trim_fixes = reporting.compact_report(raw)
         fixes.extend(trim_fixes)
-    final = reporting.validate_draft(raw, evidence, question=question, comparison=comparison)
+    # 压缩可能把“未找到另一方观点”的说明裁掉，这里再兜一次（争议类不能丢这个诚实声明）
+    if controversy:
+        raw, balance_fixes = reporting.ensure_controversy_balance(raw)
+        fixes.extend(balance_fixes)
+    # 模型重写/压缩可能把无引用断言或无证据数字又写回来：最终校验前再确定性清理一次
+    raw, final_number_fixes = reporting.scrub_unsupported_numbers(raw, evidence, question)
+    raw, final_year_fixes = reporting.scrub_year_number_mismatches(raw, evidence)
+    raw, final_table_fixes = reporting.scrub_uncited_table_rows(raw)
+    if market or controversy:
+        raw, final_claim_fixes = reporting.scrub_uncited_claims(
+            raw, market=market, controversy=controversy
+        )
+    else:
+        final_claim_fixes = []
+    fixes.extend(final_number_fixes + final_year_fixes + final_table_fixes + final_claim_fixes)
+    final = reporting.validate_draft(raw, evidence, question=question, comparison=comparison, controversy=controversy, market=market)
     draft, dropped_urls = _sanitize_report(raw, sources, evidence)
     errors = list(state.get("errors") or [])
     if dropped_urls:
@@ -1570,7 +1758,9 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
                 "remaining_issues": final["issue_count"],
                 "evidence_total": len(evidence),
                 "comparison": comparison,
-                "report_chars": len(re.sub(r"\s+", "", raw.split("## 来源清单", 1)[0])),
+                "controversy": controversy,
+                "market": market,
+                "report_chars": reporting.report_chars(raw),
             },
         }
     )

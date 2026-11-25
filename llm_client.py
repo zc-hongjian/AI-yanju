@@ -958,6 +958,16 @@ def filter_evidence(
             confidence = 0.5
         source_snippet = _normalize_ws(str(raw.get("source_snippet") or ""))[:120]
         relevance_reason = _normalize_ws(str(raw.get("relevance_reason") or ""))[:200]
+        stance = str(raw.get("stance") or "").strip()
+        if stance not in {"支持", "反对", "中立"}:
+            stance = ""
+        numbers_raw = raw.get("numbers")
+        if isinstance(numbers_raw, list):
+            numbers = [str(item)[:80] for item in numbers_raw if str(item).strip()][:8]
+        elif isinstance(numbers_raw, str) and numbers_raw.strip():
+            numbers = [numbers_raw.strip()[:80]]
+        else:
+            numbers = []
         items.append(
             {
                 "claim": claim[:300],
@@ -967,6 +977,8 @@ def filter_evidence(
                 "source_snippet": source_snippet or _normalize_ws(str(source.get("title") or "正文摘录"))[:120],
                 "relevance_reason": relevance_reason,
                 "confidence": round(max(0.0, min(1.0, confidence)), 2),
+                "stance": stance,
+                "numbers": numbers,
             }
         )
     return items, dropped

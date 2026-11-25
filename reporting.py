@@ -431,7 +431,7 @@ def _sentences(text: str) -> list[str]:
     sentences: list[str] = []
     for line in text.splitlines():
         stripped = _BULLET_RE.sub("", line).strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith("#") or stripped.startswith("|"):
             continue
         sentences.extend(part.strip() for part in _SENTENCE_SPLIT_RE.split(stripped) if part.strip())
     return sentences
@@ -479,10 +479,451 @@ def has_markdown_table(text: str) -> bool:
     return False
 
 
+def scrub_year_number_mismatches(
+    draft: str, evidence: Sequence[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    """把“数字来自 2030 年证据、却被写成 2027 年”的句子年份改回证据年份。
+
+    这是确定性纠偏：不删除关键数据，只修正年份；表格行有错配直接删除（表格无法安全改单格）。
+    """
+    text = str(draft or "")
+    body, marker, source = text.partition("## 来源清单")
+    year_by_number: dict[str, set[str]] = {}
+    for item in evidence:
+        ev_text = f"{item.get('claim') or ''} {item.get('quote') or ''}"
+        ev_years = years_in(ev_text)
+        for token in numeric_tokens(ev_text):
+            year_by_number.setdefault(token, set()).update(ev_years)
+    fixes: list[dict[str, Any]] = []
+    out: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            out.append(line)
+            continue
+        if stripped.startswith("|"):
+            s_years = years_in(stripped)
+            bad = False
+            for token in numeric_tokens(stripped):
+                ev_years = year_by_number.get(token)
+                if ev_years and s_years and not s_years & ev_years:
+                    bad = True
+                    fixes.append({"code": "dropped_year_mismatch_row", "detail": f"表格行年份与证据不符：{stripped[:40]}"})
+                    break
+            if not bad:
+                out.append(line)
+            continue
+        pieces = [part for part in _SENTENCE_SPLIT_RE.split(line) if part.strip()]
+        kept: list[str] = []
+        for piece in pieces:
+            s_years = years_in(piece)
+            replaced = False
+            if s_years:
+                for token in numeric_tokens(piece):
+                    ev_years = year_by_number.get(token)
+                    if not ev_years or s_years & ev_years:
+                        continue
+                    target_year = sorted(ev_years)[0]
+                    piece = re.sub(
+                        r"(?<!\d)((?:19|20)\d{2})(?!\d)",
+                        lambda m: target_year if m.group(1) not in ev_years else m.group(1),
+                        piece,
+                        count=1,
+                    )
+                    fixes.append(
+                        {
+                            "code": "fixed_year_mismatch",
+                            "detail": f"数字 {token} 的年份改为证据年份 {target_year}",
+                        }
+                    )
+                    replaced = True
+                    break
+            kept.append(piece)
+        if kept:
+            out.append("".join(kept).strip())
+    result = "\n".join(out).strip()
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", fixes
+
+
+def _table_data_rows(text: str) -> list[str]:
+    """返回所有 Markdown 表格的数据行（跳过表头与分隔行）。"""
+    rows: list[str] = []
+    lines = str(text or "").splitlines()
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith("|"):
+            index += 1
+            continue
+        block: list[str] = []
+        while index < len(lines) and lines[index].strip().startswith("|"):
+            block.append(lines[index])
+            index += 1
+        if len(block) >= 2 and _is_table_separator(block[1]):
+            rows.extend(block[2:])
+    return rows
+
+
 def _report_body(text: str) -> str:
     """报告正文（去掉来源清单），用于字数统计。"""
     body = str(text or "").split("## 来源清单", 1)[0]
     return body.strip()
+
+
+# ---------------------------------------------------------------- 数字 grounding
+# 只认“带单位/量级”的数字：金额（亿/万/元）、百分比、数量（个/家/倍）、英文量级（B/M/K）。
+# 裸数字容易和引用编号、年份混淆，单独由年份规则处理。
+_NUM_UNIT_RE = re.compile(
+    r"(?<![0-9A-Za-z_.])(\d[\d,]*(?:\.\d+)?)\s*"
+    r"(%|％|亿元|万元|亿|万|千万|百万|万人|千人|个|家|倍|美元|元|B|M|K|billion|million|trillion)",
+    re.I,
+)
+_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+_MD_LINK_RE = re.compile(r"\((?:https?|ftp)://[^)\s]+\)")
+_UNIT_CANON = {
+    "％": "%",
+    "%": "%",
+    "亿元": "亿",
+    "万元": "万",
+    "千万": "千万",
+    "百万": "百万",
+    "万人": "万人",
+    "千人": "千人",
+    "个": "个",
+    "家": "家",
+    "倍": "倍",
+    "美元": "美元",
+    "元": "元",
+    "b": "B",
+    "m": "M",
+    "k": "K",
+    "billion": "B",
+    "million": "M",
+    "trillion": "T",
+}
+
+
+def _canon_number(raw_num: str, unit: str) -> str:
+    num = str(raw_num).replace(",", "")
+    unit_key = unit.lower() if unit.isascii() else unit
+    canon = _UNIT_CANON.get(unit_key, unit_key)
+    return f"{num}{canon}".lower()
+
+
+def numeric_tokens(text: str) -> list[str]:
+    """抽取文本里带单位的数字（规范化成 ``500亿`` / ``80%`` 这种形式）。"""
+    clean = _MD_LINK_RE.sub("", str(text or ""))
+    return [_canon_number(match.group(1), match.group(2)) for match in _NUM_UNIT_RE.finditer(clean)]
+
+
+def years_in(text: str) -> set[str]:
+    return set(_YEAR_RE.findall(_MD_LINK_RE.sub("", str(text or ""))))
+
+
+def _allowed_numbers(evidence: Sequence[dict[str, Any]], question: str = "") -> set[str]:
+    allowed = set(numeric_tokens(question))
+    for item in evidence:
+        allowed.update(numeric_tokens(item.get("claim")))
+        allowed.update(numeric_tokens(item.get("quote")))
+        allowed.update(numeric_tokens(item.get("numbers")))
+    return allowed
+
+
+def unsupported_numbers(
+    text: str, evidence: Sequence[dict[str, Any]], question: str = ""
+) -> list[str]:
+    """报告里出现、但证据/研究问题里都找不到的带单位数字（去重、保序）。"""
+    allowed = _allowed_numbers(evidence, question)
+    bad: list[str] = []
+    for token in numeric_tokens(text):
+        if token not in allowed and token not in bad:
+            bad.append(token)
+    return bad
+
+
+def number_issues(
+    text: str, evidence: Sequence[dict[str, Any]], question: str = ""
+) -> list[dict[str, Any]]:
+    """数字问题：无证据数字 + 无证据年份 + 年份/数字错配。"""
+    issues: list[dict[str, Any]] = []
+    body = _report_body(text)
+    for token in unsupported_numbers(body, evidence, question)[:8]:
+        issues.append(
+            {
+                "code": "number_not_in_evidence",
+                "detail": f"数字「{token}」在证据与问题里都找不到，疑似推算/编造",
+            }
+        )
+    allowed_years = years_in(question)
+    for item in evidence:
+        allowed_years |= years_in(item.get("claim"))
+        allowed_years |= years_in(item.get("quote"))
+    for year in sorted(years_in(body) - allowed_years)[:5]:
+        issues.append({"code": "year_not_in_evidence", "detail": f"年份「{year}」在证据里找不到"})
+    # 年份错配：数字来自某条证据，但报告把它的年份写成了另一个年份
+    year_by_number: dict[str, set[str]] = {}
+    for item in evidence:
+        ev_text = f"{item.get('claim') or ''} {item.get('quote') or ''}"
+        ev_years = years_in(ev_text)
+        for token in numeric_tokens(ev_text):
+            year_by_number.setdefault(token, set()).update(ev_years)
+    for sentence in _sentences(body):
+        s_years = years_in(sentence)
+        if not s_years:
+            continue
+        for token in numeric_tokens(sentence):
+            ev_years = year_by_number.get(token)
+            if not ev_years or s_years & ev_years:
+                continue
+            issues.append(
+                {
+                    "code": "year_number_mismatch",
+                    "detail": (
+                        f"数字「{token}」在证据中是 {','.join(sorted(ev_years))} 年，"
+                        f"报告写成 {','.join(sorted(s_years))} 年"
+                    ),
+                }
+            )
+            break
+    return issues
+
+
+def _line_with_unsupported_numbers(line: str, evidence: Sequence[dict[str, Any]], question: str) -> tuple[bool, list[str]]:
+    bad = unsupported_numbers(line, evidence, question)
+    return bool(bad), bad
+
+
+def scrub_unsupported_numbers(
+    draft: str, evidence: Sequence[dict[str, Any]], question: str = ""
+) -> tuple[str, list[dict[str, Any]]]:
+    """确定性兜底：删掉含“证据中不存在数字”的句子/表格行，避免编造数据进入报告。"""
+    text = str(draft or "")
+    body, marker, source = text.partition("## 来源清单")
+    out: list[str] = []
+    fixes: list[dict[str, Any]] = []
+    dropped_sentences = 0
+    dropped_rows = 0
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            out.append(line)
+            continue
+        if stripped.startswith("|"):
+            bad, tokens = _line_with_unsupported_numbers(line, evidence, question)
+            if bad:
+                dropped_rows += 1
+                fixes.append(
+                    {"code": "dropped_unsupported_number_row", "detail": f"表格行含无证据数字：{', '.join(tokens)}"}
+                )
+                continue
+            out.append(line)
+            continue
+        pieces = [part for part in _SENTENCE_SPLIT_RE.split(line) if part.strip()]
+        kept: list[str] = []
+        for piece in pieces:
+            bad, tokens = _line_with_unsupported_numbers(piece, evidence, question)
+            if bad:
+                dropped_sentences += 1
+                fixes.append(
+                    {"code": "dropped_unsupported_number", "detail": f"删除含无证据数字 {', '.join(tokens)} 的句子"}
+                )
+                continue
+            kept.append(piece)
+        if kept:
+            out.append("".join(kept).strip())
+    if dropped_sentences:
+        fixes.append({"code": "scrubbed_numbers", "detail": f"共删除 {dropped_sentences} 句无证据数字表述"})
+    if dropped_rows:
+        fixes.append({"code": "scrubbed_number_rows", "detail": f"共删除 {dropped_rows} 行无证据数字表格"})
+    result = "\n".join(out).strip()
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", fixes
+
+
+def scrub_uncited_table_rows(draft: str) -> tuple[str, list[dict[str, Any]]]:
+    """删除没有任何 ``[S#]`` 引用的表格数据行（防止表格里凭常识补写结论）。"""
+    text = str(draft or "")
+    body, marker, source = text.partition("## 来源清单")
+    lines = body.splitlines()
+    out: list[str] = []
+    fixes: list[dict[str, Any]] = []
+    index = 0
+    dropped = 0
+    while index < len(lines):
+        if lines[index].strip().startswith("|"):
+            block: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                block.append(lines[index])
+                index += 1
+            if len(block) >= 2 and _is_table_separator(block[1]):
+                header, separator, rows = block[0], block[1], block[2:]
+                kept = [row for row in rows if "[S" in row]
+                dropped += len(rows) - len(kept)
+                if kept:
+                    out.extend([header, separator, *kept])
+                continue
+            out.extend(block)
+            continue
+        out.append(lines[index])
+        index += 1
+    if dropped:
+        fixes.append({"code": "dropped_uncited_table_row", "detail": f"删除 {dropped} 行无引用表格数据"})
+    result = "\n".join(out).strip()
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", fixes
+
+
+def scrub_uncited_claims(
+    draft: str, *, market: bool = False, controversy: bool = False
+) -> tuple[str, list[dict[str, Any]]]:
+    """在“需要证据”的小节里删除没有 [S#] 的断言（玩家/驱动/观点/趋势等）。
+
+    摘要/关键发现由其它校验管；这里只处理行业争议、市场分析类报告的数据/观点小节，
+    避免“百度、阿里、腾讯是主要玩家”这种无来源常识被写成结论。
+    """
+    if not (market or controversy):
+        return draft, []
+    keywords = (
+        "市场规模",
+        "主要玩家",
+        "竞争格局",
+        "增长驱动",
+        "风险",
+        "争议",
+        "支持方",
+        "反对方",
+        "正方",
+        "反方",
+        "观点",
+        "趋势",
+        "定义",
+        "区别",
+        "可能性",
+    )
+    text = str(draft or "")
+    body, marker, source = text.partition("## 来源清单")
+    sections = _split_sections(body)
+    fixes: list[dict[str, Any]] = []
+    out_sections: list[tuple[str | None, list[str]]] = []
+    for title, lines in sections:
+        if title is None or not any(word in title for word in keywords):
+            out_sections.append((title, lines))
+            continue
+        kept_lines: list[str] = []
+        dropped = 0
+        placeholder = "- 公开证据不足，本节不作结论。"
+        has_placeholder = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("|", "#")):
+                kept_lines.append(line)
+                continue
+            if stripped == placeholder:
+                if not has_placeholder:
+                    kept_lines.append(line)
+                    has_placeholder = True
+                continue
+            pieces = [part for part in _SENTENCE_SPLIT_RE.split(line) if part.strip()]
+            kept = [piece for piece in pieces if "[S" in piece]
+            dropped += len(pieces) - len(kept)
+            if kept:
+                kept_lines.append("".join(kept).strip())
+            elif pieces and not has_placeholder:
+                kept_lines.append(placeholder)
+                has_placeholder = True
+        if dropped:
+            fixes.append(
+                {"code": "dropped_uncited_claim", "detail": f"「{title}」删除 {dropped} 句无引用断言"}
+            )
+        out_sections.append((title, kept_lines))
+    result = _render_sections(out_sections)
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", fixes
+
+
+def ensure_market_table(
+    draft: str, evidence: Sequence[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    """市场类报告没有数据表时，用证据里的数字生成一张最小数据表（带年份/引用）。"""
+    text = str(draft or "")
+    if has_markdown_table(text):
+        return text, []
+    rows: list[str] = []
+    for index, item in enumerate(evidence, start=1):
+        quote = str(item.get("quote") or "").strip()
+        claim = str(item.get("claim") or "").strip()
+        # 年份/口径从 quote 取（原文只讲一个年份/口径），claim 可能把问题年份也带进来
+        meta_text = quote or claim
+        tokens = numeric_tokens(meta_text)
+        if not tokens:
+            continue
+        years = sorted(years_in(meta_text))
+        year = years[0] if years else "未注明"
+        scope = " ".join(meta_text.split())[:60]
+        rows.append(f"| 市场数据 | {'、'.join(tokens[:2])} | {year} | {scope} | [S{index}] |")
+    if not rows:
+        return text, []
+    table_lines = [
+        "| 指标 | 数值 | 年份 | 口径/说明 | 来源 |",
+        "| --- | --- | --- | --- | --- |",
+        *rows[:4],
+    ]
+    body, marker, source = text.partition("## 来源清单")
+    sections = _split_sections(body)
+    target_index = next(
+        (i for i, (title, _lines) in enumerate(sections) if title and "市场规模" in title),
+        None,
+    )
+    if target_index is not None:
+        sections[target_index] = (sections[target_index][0], table_lines)
+    else:
+        insert_at = next(
+            (i for i, (title, _lines) in enumerate(sections) if title == ANALYSIS_TITLE),
+            len(sections),
+        )
+        sections.insert(insert_at, ("市场规模与数据", table_lines))
+    result = _render_sections(sections)
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", [
+        {"code": "inserted_market_table", "detail": f"用证据数字补充数据表 {min(len(rows), 4)} 行"}
+    ]
+
+
+def ensure_controversy_balance(draft: str) -> tuple[str, list[dict[str, Any]]]:
+    """争议类报告只找到一方观点时，明确写入“未找到另一方公开观点”，不伪造平衡。"""
+    text = str(draft or "")
+    support = re.search(r"支持方|正方|支持者|赞成|看好", text)
+    oppose = re.search(r"反对方|反方|反对者|质疑|批评|看衰|反对", text)
+    if support and oppose:
+        return text, []
+    if re.search(r"未找到(另一方|反方|支持方)的?(公开)?观点", text):
+        return text, []
+    missing = "反对方" if support else "支持方"
+    note = f"- 公开证据只找到{'支持方' if support else '反对方'}观点，未找到另一方（{missing}）公开观点；本报告不伪造平衡。"
+    body, marker, source = text.partition("## 来源清单")
+    sections = _split_sections(body)
+    target = next(
+        (i for i, (title, _lines) in enumerate(sections) if title and "局限" in title),
+        None,
+    )
+    if target is not None:
+        title, lines = sections[target]
+        sections[target] = (title, [line for line in lines if line.strip()] + [note, ""])
+    else:
+        sections.append(("局限与未证实", [note, ""]))
+    result = _render_sections(sections)
+    if marker:
+        result = result.rstrip() + "\n\n" + marker.strip() + source
+    return result.strip() + "\n", [
+        {"code": "inserted_controversy_gap", "detail": f"明确标注未找到{missing}公开观点"}
+    ]
 
 
 def repeated_sentence_groups(
@@ -584,6 +1025,105 @@ def _keep_table_block(lines: Sequence[str]) -> list[str]:
         elif not kept and stripped:
             kept.append(line)  # 表格前的一句引导
     return kept
+
+
+def _render_sections(items: Sequence[tuple[str | None, list[str]]]) -> str:
+    chunks: list[str] = []
+    for title, lines in items:
+        block = "\n".join(lines).strip("\n").strip()
+        if title is None:
+            if block:
+                chunks.append(block)
+        elif block:
+            chunks.append(f"## {title}\n\n{block}")
+    return "\n\n".join(chunks).strip()
+
+
+def _section_units(lines: Sequence[str]) -> list[str]:
+    """把一个章节拆成可删除的最小单元：表格/列表/标题整行，普通段落按句。"""
+    units: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("|", "#", "- ", "* ")):
+            units.append(line)
+            continue
+        units.extend(part for part in _SENTENCE_SPLIT_RE.split(line) if part.strip())
+    return units
+
+
+def _fit_to_limit(rendered: str, target: int) -> tuple[str, list[dict[str, Any]]]:
+    """最后一道硬约束：通过删可选小节、缩减必需小节、限表格行，把正文压到 target 内。"""
+    if report_chars(rendered) <= target:
+        return rendered, []
+    sections = [(title, list(lines)) for title, lines in _split_sections(rendered)]
+    required = {SUMMARY_TITLE, FINDINGS_TITLE, ANALYSIS_TITLE, LIMITS_TITLE}
+    table_titles = {title for title, lines in sections if title and _section_has_table(lines)}
+    fixes: list[dict[str, Any]] = []
+
+    def render() -> str:
+        return _render_sections(sections)
+
+    def chars() -> int:
+        return report_chars(render())
+
+    # 1) 先删非必需、非表格小节
+    while chars() > target:
+        candidates = [
+            index
+            for index, (title, _lines) in enumerate(sections)
+            if title is not None and title not in required and title not in table_titles
+        ]
+        if not candidates:
+            break
+        index = candidates[-1]
+        fixes.append({"code": "dropped_section", "detail": f"删除非必需小节：{sections[index][0]}"})
+        sections.pop(index)
+
+    # 2) 必需小节逐句收缩（每个小节至少留 1 句/1 条）
+    priority = (LIMITS_TITLE, ANALYSIS_TITLE, FINDINGS_TITLE, SUMMARY_TITLE)
+    while chars() > target:
+        changed = False
+        for title in priority:
+            index = next((i for i, (t, _l) in enumerate(sections) if t == title), None)
+            if index is None:
+                continue
+            section_title, lines = sections[index]
+            units = _section_units(lines)
+            if len(units) > 1:
+                sections[index] = (section_title, units[:-1])
+                changed = True
+                if chars() <= target:
+                    break
+        if chars() <= target:
+            break
+        # 3) 表格最多保留表头 + 分隔 + 1 行
+        table_index = next(
+            (i for i, (t, _l) in enumerate(sections) if t in table_titles), None
+        )
+        if table_index is not None:
+            title, lines = sections[table_index]
+            table_lines = [line for line in lines if line.strip().startswith("|")]
+            other_lines = [line for line in lines if not line.strip().startswith("|")]
+            if len(table_lines) > 3:
+                sections[table_index] = (title, other_lines + table_lines[:3])
+                fixes.append({"code": "trimmed_table_rows", "detail": "表格压到表头 + 1 行数据"})
+                changed = True
+        if not changed:
+            break
+
+    text = render()
+    if report_chars(text) > target:
+        # 极端兜底：按字符硬截断（保留可读的句末）
+        while text and report_chars(text) > target:
+            text = text[:-30]
+            cut = max(text.rfind("。"), text.rfind("\n"))
+            if cut > 0:
+                text = text[: cut + 1]
+        fixes.append({"code": "hard_truncated", "detail": f"正文硬截断到 {target} 字以内"})
+        return text.strip() + "\n", fixes
+    return text.strip() + "\n", fixes
 
 
 def compact_report(
@@ -713,6 +1253,9 @@ def compact_report(
         fixes.extend(extra_fixes)
         rendered = further
     if report_chars(rendered) > target:
+        rendered, fit_fixes = _fit_to_limit(rendered, target)
+        fixes.extend(fit_fixes)
+    if report_chars(rendered) > target:
         fixes.append(
             {
                 "code": "still_over_limit",
@@ -730,6 +1273,8 @@ def validate_draft(
     *,
     question: str = "",
     comparison: bool = False,
+    controversy: bool = False,
+    market: bool = False,
 ) -> dict[str, Any]:
     """引用与结构的硬校验：返回 issues；passed=False 时应重写或程序修复。
 
@@ -809,6 +1354,24 @@ def validate_draft(
     # 对比报告必须有表格（否则模型很容易写成两段泛泛而谈的散文）
     if comparison and not has_markdown_table(text):
         add("missing_comparison_table", "对比类报告缺少 Markdown 对比表格（维度 × A × B，至少 3 个维度）")
+    if controversy:
+        support = re.search(r"支持方|正方|支持者|赞成|看好", text)
+        oppose = re.search(r"反对方|反方|反对者|质疑|批评|看衰|反对", text)
+        acknowledged_gap = re.search(r"未找到(另一方|反方|支持方)的?(公开)?观点", text)
+        if not ((support and oppose) or acknowledged_gap):
+            add("missing_opposing_view", "争议类报告缺少正反两方观点（至少各一个，且必须有引用）")
+    if market:
+        if not has_markdown_table(text):
+            add("missing_market_table", "市场类报告缺少数据表（指标 | 数值 | 年份 | 口径 | 来源）")
+        else:
+            header = next(
+                (line for line in text.splitlines() if line.strip().startswith("|")),
+                "",
+            )
+            if "年份" not in header:
+                add("market_table_missing_year", "市场数据表缺少「年份」列")
+            if not ("口径" in header or "范围" in header):
+                add("market_table_missing_scope", "市场数据表缺少「口径/范围」列，容易把细分市场当整体")
     if question:
         limit = _report_char_limit()
         chars = report_chars(text)
@@ -819,6 +1382,11 @@ def validate_draft(
                 "repeated_fact",
                 f"同一事实出现 {group['count']} 次（「{group['sample'][:30]}」），全文最多两次",
             )
+        for issue in number_issues(text, evidence, question)[:10]:
+            add(issue["code"], issue["detail"])
+        for row_index, row in enumerate(_table_data_rows(text), start=1):
+            if "[S" not in row:
+                add("table_row_without_citation", f"表格第 {row_index} 行没有任何引用角标")
     return {
         "issues": issues[:40],
         "issue_count": len(issues),
@@ -936,6 +1504,10 @@ def repair_draft(
         return bare + cites_text
 
     def _fix_line(line: str) -> str:
+        # 表格行由 scrub_uncited_table_rows 单独处理；这里不要按句子重排角标，
+        # 否则“| 指标 | 值 | [S1] |”里的引用会被判成错配并删掉。
+        if line.lstrip().startswith("|"):
+            return line
         bullet = _BULLET_RE.match(line)
         prefix = line[: bullet.end()] if bullet else line[: len(line) - len(line.lstrip())]
         body = line[len(prefix) :]
