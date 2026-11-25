@@ -5,7 +5,7 @@
 >
 > 14 节点 LangGraph 图 · 3 次 human-in-the-loop · 引用可回溯 · 断点恢复 · 可观测 Trace/成本 · 本地知识库 RAG
 
-**当前状态**：262 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
+**当前状态**：271 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
 
 ---
 
@@ -176,6 +176,8 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 | --- | --- |
 | 研究质量闭环 | 子问题覆盖度 → 缺口补检（最多再 1 轮）→ 自适应抓取 → 内容指纹去重 → claim→quote 支持校验 |
 | 抓取失败降级 | 剔除视频站/搜索引擎聚合页 → 正文全失败时用**搜索摘要**拼“摘要级证据”（标注未抓正文、需复核原文），不再直接交白卷 |
+| 代码与内页优先 | 抓取保留 `<pre>` 代码块（``` 围栏）；How 问题自动补「代码示例」+「site: 官方文档」查询（site: 0 结果自动回退）；官方文档内页加权、站点首页降权 |
+| Prompt 护栏 | 知识库防污染（外部产品问题不召回项目文档）、对比报告强制表格与冲突消解、正文 ≤1000 字且同一事实最多两次（超长确定性压缩） |
 | 报告质量闭环 | 证据卡片化（子问题/类型/营销标记/去重）→ 大纲分节 → 分节写作（摘要三段式 + 推演）→ 引用硬校验（重写更差则丢弃） |
 | 人工审批与写门禁 | 3 次 `interrupt`；`human_approved=True` 只出现在 `execute_actions`；未确认直接 `WriteActionNotApproved` |
 | 会话持久化与多轮 | SQLite checkpointer 断点恢复 + 会话索引；`parent_thread_id` 注入上一轮结论（≤1200 字） |
@@ -374,7 +376,7 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 ## 测试与验收
 
 ```bash
-pytest -q                              # 262 passed
+pytest -q                              # 271 passed
 python evaluation/acceptance_check.py  # 9/9（生成 FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ```
@@ -388,7 +390,7 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 | [原型图/](原型图/) | 22 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 42 个测试文件 / 262 用例 |
+| [tests/](tests/) | 43 个测试文件 / 271 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 

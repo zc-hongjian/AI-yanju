@@ -464,3 +464,36 @@ AutoGen 靠检查点回放状态”；「分析与推演」每条带【推断】
 **遗留**：表格内容正确性仍取决于证据质量（本次抓到的页面并非 Chroma/Milvus 官方文档，
 模型会照着弱证据填表，需要更强的来源选择）；冲突消解目前靠 Prompt，没有程序化“矛盾检测”
 （要检测“同一指标两个值”需要先做指标实体抽取，属于下一步）。
+
+## 17. 实施记录（How 类检索 P0：代码块保留 / 首页降权 / 官方站查询，2026-11-25）
+
+用户提出 4 条改进：搜索词强制加 site:/代码示例后缀、抓取拒绝只抓首页、提取宁缺毋滥、
+How 专用报告模板。经讨论确认先做 P0 前置（代码块保留 + 首页识别 + 官方域名加权 + How 查询后处理），
+理由：**不保留代码块，How 模板只会逼模型编代码**；而当前搜索不是 Tavily，`site:` 在 so360 上返回 0、
+Bing 会忽略并返回首页。
+
+### 实现
+
+| 改动 | 位置 |
+| --- | --- |
+| `<pre>` 代码块转 ``` 围栏保留；行内 `<code>` 不单独成块；fetch 缓存 namespace 升级 `fetch:v2`（避免命中旧的无代码缓存） | `tools._extract_article` / `FETCH_CACHE_KIND` |
+| 站点首页识别降权（`/`、`/index.html` 等 -0.25），文档内页路径加权（`/docs`、`/api`、`/reference`、`/guide`、`/tutorial` +0.12） | `graph._is_index_url` / `_rank_bonus` |
+| 官方文档域名表扩充（python.org / fastapi.tiangolo.com / react.dev / nodejs.org / go.dev / pypi.org …），How 问题官方站再 +0.2 | `graph.OFFICIAL_HOST_HINTS` |
+| How 问题查询兜底：`宽泛 + 代码示例 + site:` 三条；`site:` 0 结果自动回退无 site:；修复“教程 site:xxx”重复识别 | `graph._ensure_how_queries` / `search_web_node` |
+| 规划 Prompt 增加 How 查询要求（程序仍会兜底） | `prompts.PLAN_SYSTEM` / `PLAN_JSON_SYSTEM` |
+
+### 验证
+
+- 抽取实测：runoob LangGraph 快速开始页，旧版 3652 字且 `pip/import/def/``` ` 均无；新版 **12000 字**，
+  `pip install` / `import` / `def` / 代码围栏全部存在；
+- 真实运行（`trace_id=915c6b3a`，问题「LangGraph 如何实现人工中断？」）：3 条唯一查询、
+  抓到 3501 / 1830 / 12000 字三个页面，报告 966 字、≤1000，`draft_review` 通过；
+- 但报告没有代码块：本次证据提取走 `heuristic_fallback`（只抽句子），
+  说明「核心代码示例」必须等 P1（代码感知提取 + How 模板），P0 解决的是“代码不再在抓取阶段被丢掉”。
+
+### 下一步（P1/P2）
+
+- P1：证据提取增加 `code_snippet / api_names / packages / config` 字段；How 专用大纲与模板
+  （实现原理 / 核心代码示例 / 依赖安装与配置 / 常见坑与验证）；无代码证据时明确写“未抓到可核验代码”，不编造；
+- P1：首页/文档目录页 → 同域内页跟进 1 跳（最多 2 页），进一步落实“拒绝只抓首页”；
+- P2：可选 Tavily/Serper（include_domains 才能真锁官方站）；How 评测集（代码块/API/包名覆盖率）。

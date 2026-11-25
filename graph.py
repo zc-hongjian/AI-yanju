@@ -38,7 +38,7 @@ import rag
 import reporting
 import tools
 import tracing
-from llm_client import get_llm
+from llm_client import framework_site, get_llm, is_how_question
 from logging_utils import StepLog, log_stats, now_iso, summarize_text
 from persistence import get_write_audit_store, write_idempotent_enabled
 from quality import compute_coverage, coverage_terms, gap_queries_for, verify_evidence
@@ -89,11 +89,30 @@ OFFICIAL_HOST_HINTS = (
     "langchain.cn",
     "langgraph.com.cn",
     "github.com",
+    "raw.githubusercontent.com",
     "wikipedia.org",
     "openai.com",
     "docs.",
     ".gov",
     ".edu",
+    # 常见技术栈官方文档：How 类问题优先抓官方内页
+    "python.org",
+    "fastapi.tiangolo.com",
+    "pydantic.dev",
+    "react.dev",
+    "vuejs.org",
+    "nodejs.org",
+    "developer.mozilla.org",
+    "go.dev",
+    "pkg.go.dev",
+    "rust-lang.org",
+    "docs.rs",
+    "pytorch.org",
+    "tensorflow.org",
+    "kubernetes.io",
+    "readthedocs.io",
+    "pypi.org",
+    "npmjs.com",
 )
 
 URL_RE = re.compile(r"(?i)(?:https?|ftp)://[^\s)\]\"'<>，。；]+")
@@ -264,8 +283,12 @@ def _page_target(state: ResearchState) -> int:
     return max(1, min(MAX_PAGES_HARD, target))
 
 
-def _rank_bonus(hit: dict[str, Any], terms: list[str]) -> float:
-    """检索结果重排：问题词命中 + 官方/文档站点先验，避免完全按搜索引擎顺序抓。"""
+def _rank_bonus(hit: dict[str, Any], terms: list[str], *, how: bool = False) -> float:
+    """检索结果重排：问题词命中 + 官方/文档站点先验，避免完全按搜索引擎顺序抓。
+
+    How 类问题额外加权官方文档内页、降低“站点首页/文档目录页”的优先级——
+    实测搜索引擎对 ``site:`` 查询经常直接返回首页，抓下来全是导航和简介。
+    """
     title = str(hit.get("title") or "")
     snippet = str(hit.get("snippet") or "")
     url = str(hit.get("url") or "")
@@ -275,8 +298,16 @@ def _rank_bonus(hit: dict[str, Any], terms: list[str]) -> float:
         matched = sum(1 for term in terms if term in text)
         bonus += min(0.3, 0.05 * matched)
     host = (urlparse(url).hostname or "").lower()
-    if any(hint in host for hint in OFFICIAL_HOST_HINTS):
+    official = any(hint in host for hint in OFFICIAL_HOST_HINTS)
+    if official:
         bonus += 0.15
+    path = (urlparse(url).path or "").lower()
+    if _is_index_url(url):
+        bonus -= 0.25
+    elif any(token in path for token in ("/docs", "/api", "/reference", "/guide", "/tutorial", "/how")):
+        bonus += 0.12
+    if how and official:
+        bonus += 0.2  # How 问题优先官方文档内页
     if url.lower().endswith(".pdf"):
         bonus -= 0.1  # PDF 抓取失败率更高，同等条件下稍后尝试
     return bonus
@@ -355,6 +386,100 @@ def _snippet_pages(
     return pages
 
 
+def _is_index_url(url: str) -> bool:
+    """是否是“文档首页/站点入口”：这类页面优先度要降低，给具体文档内页让路。"""
+    try:
+        parsed = urlparse(str(url or ""))
+    except ValueError:
+        return False
+    path = (parsed.path or "").lower()
+    if path in ("", "/"):
+        return True
+    return path.rstrip("/") in (
+        "/index.html",
+        "/index.htm",
+        "/index.php",
+        "/index.aspx",
+        "/default.htm",
+        "/default.aspx",
+    )
+
+
+def _strip_site_query(query: str) -> str:
+    """去掉查询里的 ``site:xxx`` 限定，用于官方站查询 0 结果时的自动回退。"""
+    cleaned = re.sub(r"(?i)\s*site:\S+", " ", str(query or ""))
+    return " ".join(cleaned.split()).strip()
+
+
+# 真正算“代码示例查询”的标记：只有教程/教程字样不算，必须有代码/示例词
+HOW_CODE_QUERY_HINTS = ("代码示例", "示例代码", "code example", "example code")
+
+
+def _ensure_how_queries(
+    question: str, queries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """How 类问题强制补两类查询：代码示例 + 官方站 site: 限定。
+
+    保证最终是「1 条宽泛 + 1 条代码示例 + 1 条 site:」共 MAX_QUERIES 条；
+    ``site:`` 查询 0 结果时由搜索节点自动回退成无 site: 版本，所以不会白占额度。
+    """
+    if not is_how_question(question):
+        return queries
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in queries:
+        query = str((item or {}).get("query") or "").strip()
+        key = query.lower()
+        if not query or key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(item))
+
+    def _has_code_marker(text: str) -> bool:
+        lowered = text.lower()
+        return any(hint in lowered for hint in HOW_CODE_QUERY_HINTS)
+
+    broad = next(
+        (
+            item
+            for item in merged
+            if "site:" not in str(item.get("query") or "").lower()
+            and not _has_code_marker(str(item.get("query") or ""))
+        ),
+        None,
+    ) or {"query": question, "max_results": 5}
+    base = str(broad.get("query") or question).strip() or question
+    code_query = next(
+        (
+            item
+            for item in merged
+            if _has_code_marker(str(item.get("query") or ""))
+        ),
+        None,
+    )
+    site_query = next(
+        (item for item in merged if "site:" in str(item.get("query") or "").lower()),
+        None,
+    )
+    site = framework_site(question) or "github.com"
+    ordered: list[dict[str, Any]] = [dict(broad)]
+    ordered.append(
+        dict(code_query) if code_query else {"query": f"{base} 代码示例 code example", "max_results": 5}
+    )
+    ordered.append(dict(site_query) if site_query else {"query": f"{base} site:{site}", "max_results": 5})
+    # 去重：避免“教程 site:xxx”同时被当成代码查询和 site 查询（实测会产生两条重复）
+    deduped: list[dict[str, Any]] = []
+    seen_queries: set[str] = set()
+    for item in ordered:
+        query = str(item.get("query") or "").strip()
+        key = query.lower()
+        if not query or key in seen_queries:
+            continue
+        seen_queries.add(key)
+        deduped.append(item)
+    return deduped[:MAX_QUERIES]
+
+
 def _merge_hits(existing: list[dict[str, Any]], new_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按 URL 合并两轮检索结果；保留首轮顺序与原始 score。"""
     merged: list[dict[str, Any]] = []
@@ -413,6 +538,8 @@ def plan_research(state: ResearchState) -> dict[str, Any]:
         }
         status, error = "degraded", f"检索规划失败：{exc}"
         errors.append({"node": "plan_research", "type": "llm_error", "error": str(exc)})
+    # How 类问题：保证「代码示例 + 官方站 site:」两类查询（site: 0 结果时搜索节点会自动回退）
+    plan["queries"] = _ensure_how_queries(question, list(plan.get("queries") or []))
     latency = _elapsed_ms(start)
     queries = plan.get("queries") or []
     sub_questions = plan.get("sub_questions") or []
@@ -462,6 +589,21 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
         except (TypeError, ValueError):
             max_results = 5
         result = tools.call_tool("search_web", {"query": query, "max_results": max_results})
+        # 官方站 site: 查询在 so360 上经常直接 0 结果、在 Bing 上被忽略；
+        # 0 结果/失败时自动回退成无 site: 的查询，避免白占一次检索额度。
+        query_used = query
+        site_fallback = False
+        if (not result.ok or not (result.data or [])) and "site:" in query.lower():
+            fallback_query = _strip_site_query(query)
+            if fallback_query and fallback_query.lower() != query.lower():
+                retry = tools.call_tool(
+                    "search_web", {"query": fallback_query, "max_results": max_results}
+                )
+                retry_counts["search_web"] = retry_counts.get("search_web", 0) + max(
+                    0, retry.attempts - 1
+                )
+                if retry.ok and retry.data:
+                    result, query_used, site_fallback = retry, fallback_query, True
         retry_counts["search_web"] = retry_counts.get("search_web", 0) + max(0, result.attempts - 1)
         if result.ok:
             hits = list(result.data or [])
@@ -476,10 +618,11 @@ def search_web_node(state: ResearchState) -> dict[str, Any]:
             sl.add(
                 node_name="search_web",
                 tool_name="search_web",
-                input_summary=f"[第{round_no + 1}轮] {query}",
+                input_summary=f"[第{round_no + 1}轮] {query_used}",
                 output_summary=(
                     f"{len(usable_hits)} 条结果"
                     + (f"（过滤 {dropped_junk} 条视频/搜索聚合页）" if dropped_junk else "")
+                    + ("（site: 查询 0 结果，已回退无 site: 查询）" if site_fallback else "")
                 ),
                 status="ok",
                 retry_count=max(0, result.attempts - 1),
@@ -571,6 +714,7 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
     seen_fingerprints.discard("")
 
     plan = state.get("plan") or {}
+    how_question = is_how_question(str(state.get("research_question") or ""))
     terms = coverage_terms(
         f"{state.get('research_question') or ''} " + " ".join(str(q) for q in plan.get("sub_questions") or [])
     )
@@ -580,7 +724,7 @@ def fetch_pages_node(state: ResearchState) -> dict[str, Any]:
             for hit in state.get("search_results") or []
             if str(hit.get("url") or "").strip() not in fetched_urls
         ),
-        key=lambda hit: float(hit.get("score") or 0) + _rank_bonus(hit, terms),
+        key=lambda hit: float(hit.get("score") or 0) + _rank_bonus(hit, terms, how=how_question),
         reverse=True,
     )
     pages: list[dict[str, Any]] = list(existing_pages)

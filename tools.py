@@ -598,11 +598,57 @@ def _fetch_with_safe_redirects(url: str, *, max_hops: int = 4) -> requests.Respo
     raise NonRetryableToolError(f"重定向次数过多（>{max_hops} 次）")
 
 
+FETCH_CACHE_KIND = "fetch:v2"  # 抽取逻辑升级（保留代码块）后换 kind，避免命中旧的无代码缓存
+
+
+def _extract_article(html: str) -> tuple[str, list[str], int]:
+    """从 HTML 抽正文：保留标题/段落/列表，并把 <pre> 代码块转成 ``` 围栏。
+
+    早期版本只抽 h1~h3/p/li，代码块被整个丢掉——How 类问题因此永远拿不到代码。
+    这里把 <pre>（含其中的 <code>）按文档顺序保留为围栏代码块，供证据提取与
+    “核心代码示例”章节使用；行内 <code> 不单独成块。
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form", "svg"]):
+        tag.decompose()
+    for tag in soup.find_all(_is_ad_node):
+        tag.decompose()
+    title = sanitize_invisible(soup.title.get_text(" ", strip=True)) if soup.title else ""
+    if not title or is_garbled(title):
+        title = ""
+    root = soup.find("article") or soup.find("main") or soup.body or soup
+    parts: list[str] = []
+    seen: set[str] = set()
+    for node in root.find_all(["h1", "h2", "h3", "p", "li", "pre"]):
+        if node.name == "pre":
+            code = sanitize_invisible(node.get_text("\n", strip=False)).strip("\n")
+            code = re.sub(r"\n{3,}", "\n\n", code).strip()
+            if len(code) < 8:
+                continue
+            key = code[:80]
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(f"```\n{code}\n```")
+            continue
+        if node.find_parent("pre"):
+            continue
+        text = sanitize_invisible(node.get_text(" ", strip=True))
+        if len(text) < 25:
+            continue
+        key = text[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(text)
+    return title, parts, len(parts)
+
+
 def _fetch_page_impl(url: Any) -> dict[str, Any]:
     url = _require_text(url, "url", max_len=2000)
     _assert_safe_url(url)
     cache_key = cache.normalize_url(url)
-    cached = cache.get_value("fetch", cache_key)
+    cached = cache.get_value(FETCH_CACHE_KIND, cache_key)
     if isinstance(cached, dict) and cached.get("content"):
         hit = dict(cached)
         hit["cached"] = True
@@ -632,26 +678,9 @@ def _fetch_page_impl(url: Any) -> dict[str, Any]:
         resp.close()
     # 不用 resp.text：很多站点 charset 声明缺失或写错，统一从原始字节探测编码
     html, encoding = decode_body(raw, content_type_header)
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form", "svg"]):
-        tag.decompose()
-    for tag in soup.find_all(_is_ad_node):
-        tag.decompose()
-    title = sanitize_invisible(soup.title.get_text(" ", strip=True)) if soup.title else ""
-    if not title or is_garbled(title):
+    title, parts, _ = _extract_article(html)
+    if not title:
         title = url
-    root = soup.find("article") or soup.find("main") or soup.body or soup
-    parts: list[str] = []
-    seen: set[str] = set()
-    for node in root.find_all(["h1", "h2", "h3", "p", "li"]):
-        text = sanitize_invisible(node.get_text(" ", strip=True))
-        if len(text) < 25:
-            continue
-        key = text[:80]
-        if key in seen:
-            continue
-        seen.add(key)
-        parts.append(text)
     # 入库前清洗：丢弃乱码段落，避免脏数据进入证据提取
     parts, dropped_blocks = clean_text_blocks(parts)
     content = "\n".join(parts)[:MAX_PAGE_CHARS].strip()
@@ -667,7 +696,7 @@ def _fetch_page_impl(url: Any) -> dict[str, Any]:
         "encoding": encoding,
         "dropped_blocks": dropped_blocks,
     }
-    cache.put_value("fetch", cache_key, payload)
+    cache.put_value(FETCH_CACHE_KIND, cache_key, payload)
     return payload
 
 
