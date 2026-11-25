@@ -625,6 +625,14 @@ class LLMClient:
         note = str(data.get("note") or "").strip()
         if dropped:
             note = (note + f"；已丢弃 {dropped} 条无法对应到来源原文的引用").lstrip("；")
+        supplement, supplement_stats = supplement_evidence(question, usable, evidence)
+        if supplement:
+            evidence = [*evidence, *supplement]
+            note = (
+                note
+                + f"；LLM 未提取的 {supplement_stats['pages_missed']} 个来源补 "
+                + f"{supplement_stats['supplemented']} 条启发式摘录（需复核原文）"
+            ).lstrip("；")
         if not evidence:
             return {
                 "evidence": heuristic_evidence(question, usable),
@@ -1085,6 +1093,102 @@ def heuristic_evidence(question: str, sources: Iterable[dict[str, Any]]) -> list
 def _claim_key(text: str) -> str:
     """归一化结论文本，用于识别“多条证据表达同一意思”。"""
     return re.sub(r"[\s，,。.；;:：、!！?？\"'“”‘’（）()\[\]【】]+", "", str(text or "")).lower()
+
+
+def _evidence_supplement_enabled() -> bool:
+    """LLM 证据提取的召回兜底开关：AGENT_EVIDENCE_SUPPLEMENT=0 关闭（消融对比用）。"""
+    return os.getenv("AGENT_EVIDENCE_SUPPLEMENT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _supplement_per_source_cap() -> int:
+    try:
+        return max(1, min(3, int(os.getenv("AGENT_EVIDENCE_SUPPLEMENT_PER_SOURCE", "2"))))
+    except ValueError:
+        return 2
+
+
+def _supplement_total_cap() -> int:
+    try:
+        return max(1, min(8, int(os.getenv("AGENT_EVIDENCE_SUPPLEMENT_MAX", "2"))))
+    except ValueError:
+        return 2
+
+
+_DIRECTORY_TITLE_RE = re.compile(r"导航|工具集|工具大全|网址大全|排行榜|目录|合集", re.I)
+_DIRECTORY_HOSTS = ("ai-bot.cn",)
+
+
+def _looks_like_directory(source: dict[str, Any]) -> bool:
+    """工具导航/榜单页：哪怕正文长，也不是可引用的研究证据。"""
+    title = str(source.get("title") or "")
+    if _DIRECTORY_TITLE_RE.search(title):
+        return True
+    host = str(source.get("url") or "").lower()
+    return any(item in host for item in _DIRECTORY_HOSTS)
+
+
+def supplement_evidence(
+    question: str,
+    sources: Iterable[dict[str, Any]],
+    existing: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """对“抓到了正文、但 LLM 没提取出证据”的来源做启发式召回兜底。
+
+    实测问题：4 个来源抓取成功（如凤凰网 1713 字），LLM 按“宁缺毋滥”只返回 1 条证据，
+    市场题里玩家/驱动/风险几节因此没有素材。这里只对零证据的来源逐句摘录，
+    仍然过关键词相关性与导航/表格噪声过滤；条数有上限，claim 与 quote 都取原句，
+    因此不会引入新事实，只在 note 里显式标注“启发式兜底、需复核原文”。
+
+    质量门（P2 实测踩坑后补）：
+    - 语言对齐：中文问题只补中文句子，避免把英文定义页的“AI agent is…”摘进中文报告；
+    - 相关性：候选句至少要命中 2 个问题关键词（只有“AI/agent”这类泛词不算）；
+    - 目录页：工具导航/榜单页即使抓取成功也不补。
+    """
+    if not _evidence_supplement_enabled():
+        return [], {"supplemented": 0, "pages_missed": 0}
+    items = [item for item in existing if isinstance(item, dict)]
+    covered_urls = {_normalize_url(str(item.get("source_url") or "")) for item in items}
+    seen = {_claim_key(str(item.get("claim") or item.get("quote") or "")) for item in items}
+    question_has_cjk = _has_cjk(question)
+    question_keywords = keywords(question)
+    supplement: list[dict[str, Any]] = []
+    pages_missed = 0
+    for source in sources:
+        url = _normalize_url(str(source.get("url") or ""))
+        content = str(source.get("content") or "")
+        # 太短的正文通常只是搜索摘要/导航，抽不出可用证据，不补
+        if not url or url in covered_urls or len(content) < 200:
+            continue
+        if _looks_like_directory(source):
+            continue
+        pages_missed += 1
+        if len(supplement) >= _supplement_total_cap():
+            continue
+        picked = 0
+        for candidate in heuristic_evidence(question, [source]):
+            claim = str(candidate.get("claim") or "")
+            key = _claim_key(claim)
+            if not key or key in seen:
+                continue
+            if question_has_cjk != _has_cjk(claim):
+                continue
+            hits = sum(1 for word in question_keywords if word in claim.lower())
+            if hits < 2:
+                continue
+            seen.add(key)
+            item = dict(candidate)
+            item.update(
+                {
+                    "extraction": "heuristic_supplement",
+                    "relevance_reason": "LLM 未从该页提取证据；启发式兜底摘录原句（需复核原文）",
+                    "confidence": round(min(0.55, float(candidate.get("confidence") or 0.5)), 2),
+                }
+            )
+            supplement.append(item)
+            picked += 1
+            if picked >= _supplement_per_source_cap():
+                break
+    return supplement, {"supplemented": len(supplement), "pages_missed": pages_missed}
 
 
 def _merge_claims(evidence: list[dict[str, Any]]) -> list[tuple[str, list[int]]]:

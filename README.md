@@ -1,11 +1,11 @@
-﻿# LangGraph 研究助手（Research Assistant MVP）
+# LangGraph 研究助手（Research Assistant MVP）
 
 > 一个只做**研究助手窄场景**的 Agent：研究问题 → 拆解检索 → 联网搜索/抓取 → 提取证据 →
 > 生成带引用的报告 → **三处人工确认** → 发邮件 / 存 Notion → 输出最终结果。
 >
 > 14 节点 LangGraph 图 · 3 次 human-in-the-loop · 引用可回溯 · 断点恢复 · 可观测 Trace/成本 · 本地知识库 RAG
 
-**当前状态**：290 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
+**当前状态**：300 个测试全绿 · 9 项功能验收 9/9 · 知识库验收 6/6 · 真实联网 40 题评测已完成
 
 ---
 
@@ -180,6 +180,7 @@ python check_llm.py               # 真实调用一次，确认 Key/Base URL/模
 | Prompt 护栏 | 知识库防污染（外部产品问题不召回项目文档）、对比报告强制表格与冲突消解、正文 ≤1000 字且同一事实最多两次（超长确定性压缩） |
 | 防幻觉 | 报告数字必须能在证据中找到（无证据数字/年份自动删除或纠正）；表格行必须有引用，否则删除；词典/翻译/搜索聚合页不进证据 |
 | 争议/市场模板 | 争议类强制正反两方观点 + 证据强度 + 趋势判断；市场类强制数据表（指标/数值/年份/口径/来源）+ 玩家/驱动/风险；中文问题优先中文查询并补意图词 |
+| 覆盖率与证据召回 | 覆盖率按「主题 + 方面」两层判定（数据要数值、玩家要竞争信号…），修掉 1 条证据 5/5 的假阳性；「局限」小节与未覆盖子问题强制对齐；LLM 漏提取的来源用启发式摘录兜底（语言对齐、≥2 个关键词命中、目录页过滤，最多 2 条） |
 | 报告质量闭环 | 证据卡片化（子问题/类型/营销标记/去重）→ 大纲分节 → 分节写作（摘要三段式 + 推演）→ 引用硬校验（重写更差则丢弃） |
 | 人工审批与写门禁 | 3 次 `interrupt`；`human_approved=True` 只出现在 `execute_actions`；未确认直接 `WriteActionNotApproved` |
 | 会话持久化与多轮 | SQLite checkpointer 断点恢复 + 会话索引；`parent_thread_id` 注入上一轮结论（≤1200 字） |
@@ -378,7 +379,7 @@ mock 流水线基线：成功率 100%、覆盖率 90%、支持率 100%、延迟 
 ## 测试与验收
 
 ```bash
-pytest -q                              # 290 passed
+pytest -q                              # 300 passed
 python evaluation/acceptance_check.py  # 9/9（生成 FUNCTIONAL_ACCEPTANCE.md）
 python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 ```
@@ -392,7 +393,7 @@ python evaluation/kb_check.py          # 6/6（只给 knowledge/、不联网）
 | [原型图/](原型图/) | 22 张页面原型/界面截图（含索引） |
 | [开发文档/](开发文档/) | 接口文档、数据库设计、质量与可靠性设计、测试与验收、评测方法、优化记录、验收/评测报告 |
 | [frontend/](frontend/) · [backend/](backend/) | 前端/后端代码索引（代码仍在根目录） |
-| [tests/](tests/) | 45 个测试文件 / 290 用例 |
+| [tests/](tests/) | 46 个测试文件 / 300 用例 |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 项目快照（架构、能力矩阵、限制） |
 | [docs/](docs/) | 已迁移，仅指向 原型图/ |
 

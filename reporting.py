@@ -1553,4 +1553,28 @@ def repair_draft(
         text = f"{text.rstrip()}\n\n" + "\n".join(limits_lines(evidence, uncovered))
         fixes.append({"code": "inserted_limits", "detail": LIMITS_TITLE})
 
+    # 5) 局限小节与覆盖率对齐：模型常写“子问题均已覆盖”，但 coverage 判定有未覆盖项时
+    #    这种套话会与指标自相矛盾；这里改成逐条列出未覆盖子问题（确定性，不靠模型）。
+    if uncovered:
+        pending = [str(item).strip() for item in uncovered if str(item).strip()]
+        if pending:
+            text = re.sub(
+                r"^- .*(?:子问题均至少有一条证据|子问题均已覆盖|子问题均已被覆盖).*\n?",
+                "",
+                text,
+                flags=re.M,
+            )
+            missing = [item for item in pending if item not in text]
+            if missing:
+                bullets = "\n".join(
+                    f"- 未覆盖：{item[:60]}（没有可回溯到原文的证据，未下结论）。" for item in missing[:3]
+                )
+                match = re.search(rf"^##\s*{re.escape(LIMITS_TITLE)}\s*$", text, re.M)
+                if match:
+                    insert_at = match.end()
+                    rest = text[insert_at:]
+                    insert_at += len(rest) - len(rest.lstrip("\n"))
+                    text = text[:insert_at] + "\n" + bullets + "\n" + text[insert_at:]
+                fixes.append({"code": "inserted_uncovered_limits", "detail": "；".join(missing[:3])})
+
     return text, fixes

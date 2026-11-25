@@ -32,8 +32,12 @@ _STRUCTURAL_RE = re.compile("|".join(re.escape(word) for word in _STRUCTURAL_WOR
 # 子问题模板后缀：用于生成补检 query 的 aspect（不直接作为 coverage 术语）
 _ASPECT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"关键数据|最新数据|最新进展|最新动态"), "最新 数据 进展"),
-    (re.compile(r"主要挑战|主要原因|挑战与原因|困难与原因"), "挑战 原因"),
+    (re.compile(r"主要挑战|主要原因|挑战与原因|困难与原因|风险与挑战"), "挑战 原因 风险"),
     (re.compile(r"权威来源|典型案例|案例|来源"), "案例 来源"),
+    (re.compile(r"主要参与者|主要玩家|竞争格局|市场格局|竞争者|厂商|格局|玩家"), "参与者 竞争 格局"),
+    (re.compile(r"驱动因素|增长驱动|驱动|推动"), "驱动 因素"),
+    (re.compile(r"争议焦点|支持方观点|反对方观点|不同观点|争议|观点|立场"), "争议 观点 立场"),
+    (re.compile(r"市场规模|市场份额|市场趋势|市场前景|规模|份额|营收|收入"), "市场规模 份额 数据"),
     (re.compile(r"在不同|差异|区别|对比"), "对比 差异"),
     (re.compile(r"实现原理|底层原理|工作原理|原理"), "原理 实现"),
     (re.compile(r"具体步骤|实现步骤|操作步骤|代码示例|示例代码|步骤"), "步骤 代码 示例"),
@@ -41,6 +45,113 @@ _ASPECT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"常见问题|最佳实践|注意事项"), "常见问题 最佳实践"),
     (re.compile(r"官方文档|官方说明|文档"), "官方文档"),
 )
+
+# ---------------------------------------------------------------- 覆盖度：按“方面”判定
+# 旧实现只看子问题与证据的词面重叠：中文块只要命中 2 个字（如“市场”）就算覆盖，
+# 于是 1 条“市场规模”证据也能把“玩家 / 驱动 / 风险”等子问题全判成已覆盖（实测 5/5 假阳性）。
+# 现在把子问题拆成「主题（subquestion_core）」+「方面（aspect）」两层：
+#   - 主题：英文实体必须命中，中文主题块要求至少 3 个连续字命中（2 字块要求整块命中）；
+#   - 方面：问题侧识别词 + 证据侧信号词两边都命中，且同一子问题的方面必须全部满足。
+_CoverageAspect = tuple[str, str, re.Pattern[str], re.Pattern[str]]
+_COVERAGE_ASPECTS: tuple[_CoverageAspect, ...] = (
+    (
+        "data",
+        "数据",
+        re.compile(r"数据|数字|规模|体量|份额|营收|收入|增速|增长率|渗透率|指标|统计|金额|投融资|估值|用户数", re.I),
+        re.compile(
+            r"\d+(?:\.\d+)?\s*(?:%|％|亿|万|千|百万|十亿|元|美元|台|辆|人|家|个|倍|个百分点)"
+            r"|同比增长|环比|达到.{0,8}\d",
+            re.I,
+        ),
+    ),
+    (
+        "trend",
+        "趋势",
+        re.compile(r"趋势|进展|动向|最新|前景|预测|展望|变化|发展|走向", re.I),
+        re.compile(r"增长|下降|上升|预计|预测|展望|最新|发布|推出|首次|20\d{2}\s*年|同比|环比", re.I),
+    ),
+    (
+        "challenge",
+        "挑战",
+        re.compile(r"挑战|风险|瓶颈|难点|局限|障碍|不足|痛点|问题|困难|顾虑|隐患", re.I),
+        re.compile(
+            r"挑战|风险|瓶颈|难点|局限|障碍|不足|痛点|困难|顾虑|隐患|隐私|安全|合规|监管|成本高|难以",
+            re.I,
+        ),
+    ),
+    (
+        "player",
+        "参与者",
+        re.compile(r"参与者|玩家|厂商|竞争者|竞争格局|格局|头部|公司|企业|客户|对手|替代|排名|领先|占据", re.I),
+        re.compile(r"竞争|份额|格局|排名|领先|第一|头部|厂商|玩家|对手|替代|占据|企业|公司|客户", re.I),
+    ),
+    (
+        "driver",
+        "驱动因素",
+        re.compile(r"驱动|推动|原因|因素|背后|为什么", re.I),
+        re.compile(r"驱动|推动|带动|受益|原因|由于|因为|取决于|依赖于", re.I),
+    ),
+    (
+        "official",
+        "权威来源",
+        re.compile(r"官方|文档|权威|来源|出处|规范|标准|白皮书|报告", re.I),
+        re.compile(
+            r"官方|文档|docs|documentation|github|规范|标准|白皮书|报告|研究院|gartner|idc|forrester",
+            re.I,
+        ),
+    ),
+    (
+        "case",
+        "案例",
+        re.compile(r"案例|实例|实践|落地|试点|客户|采用", re.I),
+        re.compile(r"案例|例如|比如|实践中|客户|采用|部署|落地|试点|某公司|一家", re.I),
+    ),
+    (
+        "principle",
+        "原理",
+        re.compile(r"原理|机制|架构|工作方式|底层|内部|如何实现", re.I),
+        re.compile(r"原理|机制|架构|通过|依赖|内部|流程|模块|组件|基于", re.I),
+    ),
+    (
+        "steps",
+        "步骤",
+        re.compile(r"步骤|实现|用法|安装|配置|命令|代码|教程|API|接口|示例", re.I),
+        re.compile(r"步骤|安装|配置|命令|代码|调用|使用|执行|import|pip|npm|curl|示例|如下", re.I),
+    ),
+    (
+        "difference",
+        "差异",
+        re.compile(r"差异|区别|对比|优劣|优缺点|适合|不同|相比", re.I),
+        re.compile(r"相比|对比|不同|区别|优于|不如|适合|优势|劣势", re.I),
+    ),
+    (
+        "stance",
+        "观点立场",
+        re.compile(r"争议|观点|立场|支持|反对|正方|反方|争论|分歧", re.I),
+        re.compile(r"认为|指出|主张|反对|支持|质疑|争议|分歧|观点|立场", re.I),
+    ),
+)
+_ASPECT_EVIDENCE: dict[str, re.Pattern[str]] = {key: signal for key, _, _, signal in _COVERAGE_ASPECTS}
+
+# 主题里过于宽泛的词：单独命中不能算“主题被覆盖”（“市场”“行业”等词几乎每篇证据都有）
+_GENERIC_TOPIC_WORDS = frozenset(
+    {
+        "市场", "行业", "技术", "发展", "企业", "公司", "产品", "领域", "现状", "趋势",
+        "数据", "挑战", "竞争", "格局", "参与", "玩家", "争议", "观点", "案例", "来源",
+        "问题", "风险", "原因", "因素", "影响", "作用", "优点", "缺点", "优势", "劣势",
+        "规模", "份额", "方法", "方式", "系统", "平台", "工具", "模型", "能力", "价值",
+        "意义", "概念", "定义", "介绍", "概述", "内容", "信息", "应用", "场景", "需求",
+        "用户", "客户", "方案", "策略", "背景", "情况", "方面",
+        # 技术类子问题的模板词：靠“函数/代码/步骤”等词本身不能证明主题被覆盖
+        "函数", "代码", "示例", "步骤", "原理", "机制", "架构", "依赖", "配置",
+        "安装", "接口", "参数", "组件", "模块", "流程", "命令", "文档", "教程",
+        # 市场/趋势类子问题的模板词
+        "增长", "增速", "驱动", "参与者", "厂商", "头部", "机遇", "前景",
+    }
+)
+
+# 主题里的年份只是限定范围，不是主题词：`2027年中国…` 不能要求证据里出现“年中国”。
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}\s*年?")
 
 # 判断“同一个结论”时使用的否定词；claim 与 quote 否定性不一致时降级为 partial。
 _NEGATIONS = ("不", "没", "无", "未", "非", "无法", "不能", "不是", "not", "no", "never", "without", "cannot")
@@ -99,8 +210,13 @@ def subquestion_core(sub_question: str) -> str:
     text = re.sub(
         r"(?:的)?(?:核心结论|主要结论|主要事实|基本概念|基本定义|关键数据|最新数据|"
         r"最新进展|最新动态|主要挑战|主要原因|挑战与原因|困难与原因|权威来源|典型案例|"
+        r"未来发展趋势比较|未来趋势比较|发展趋势比较|正面观点分析|反面观点分析|"
+        r"正面观点|反面观点|正方观点|反方观点|观点分析|定义及区别|定义与区别|案例研究|"
         r"案例|来源|实现原理|底层原理|工作原理|具体步骤|实现步骤|操作步骤|代码示例|"
-        r"示例代码|前置条件|依赖|准备条件|常见问题|最佳实践|注意事项|官方文档|官方说明|文档)"
+        r"示例代码|前置条件|依赖|准备条件|常见问题|最佳实践|注意事项|官方文档|官方说明|文档|"
+        r"市场规模|市场份额|市场趋势|市场格局|市场前景|主要参与者|主要玩家|典型玩家|头部玩家|"
+        r"竞争者|竞争格局|驱动因素|增长驱动|主要风险|风险与挑战|趋势判断|争议焦点|"
+        r"支持方观点|反对方观点|不同观点|证据强度|落地案例|商业模式|产业链|政策环境)"
         r"(?:与|和|及|或|、)?.*$",
         "",
         text,
@@ -120,7 +236,14 @@ def _aspect_for(sub_question: str) -> str:
 
 
 def _evidence_text(item: dict[str, Any]) -> str:
-    return normalize(f"{item.get('claim') or ''} {item.get('quote') or ''}").lower()
+    """证据正文：claim + quote + 结构化数字（numbers 是模型显式抽出的数值/年份/口径）。"""
+    parts = [str(item.get("claim") or ""), str(item.get("quote") or "")]
+    numbers = item.get("numbers")
+    if isinstance(numbers, (list, tuple)):
+        parts.extend(str(value) for value in numbers)
+    elif isinstance(numbers, str):
+        parts.append(numbers)
+    return normalize(" ".join(parts)).lower()
 
 
 def _coverage_units(text: str) -> tuple[list[str], list[str]]:
@@ -130,6 +253,7 @@ def _coverage_units(text: str) -> tuple[list[str], list[str]]:
     这样“企业落地”被“企业”或“落地”覆盖都算有效，避免长词稀释分数。
     """
     cleaned = _STRUCTURAL_RE.sub(" ", normalize(text))
+    cleaned = _YEAR_RE.sub(" ", cleaned)
     latin = [word.lower() for word in LATIN_RE.findall(cleaned)]
     latin = list(dict.fromkeys(word for word in latin if len(word) > 1))
     chunks: list[str] = []
@@ -141,14 +265,49 @@ def _coverage_units(text: str) -> tuple[list[str], list[str]]:
 
 
 def _chunk_matches(chunk: str, corpus: str) -> bool:
+    """中文块匹配：要求命中 min(len(chunk), 3) 个连续字。
+
+    旧实现只要 2 字重叠就算命中，于是“市场规模”“竞争格局”仅凭“市场”“竞争”
+    就被判成已覆盖。现在 2 字块要求整块命中，更长的块要求 3 字连续命中。
+    """
+    if not chunk:
+        return False
     if chunk in corpus:
         return True
-    for size in (2, 3, 4):
-        if len(chunk) < size:
-            continue
-        for start in range(0, len(chunk) - size + 1):
-            if chunk[start : start + size] in corpus:
-                return True
+    size = min(len(chunk), 3)
+    return any(
+        chunk[start : start + size] in corpus
+        for start in range(0, len(chunk) - size + 1)
+    )
+
+
+def _aspects_for(sub_question: str) -> list[tuple[str, str]]:
+    """子问题里显式要求的“方面”（数据/趋势/挑战/参与者/…）。
+
+    “挑战与原因”这种模板里原因只是挑战的解释，合并成一个方面，避免要求
+    证据同时出现“挑战”和“因为”两类词。
+    """
+    text = normalize(sub_question)
+    found: list[tuple[str, str]] = []
+    for key, label, question_pattern, _ in _COVERAGE_ASPECTS:
+        if question_pattern.search(text):
+            found.append((key, label))
+    keys = {key for key, _ in found}
+    if "challenge" in keys and "driver" in keys:
+        found = [item for item in found if item[0] != "driver"]
+    return found
+
+
+def _aspect_matches_item(key: str, text: str, item: dict[str, Any]) -> bool:
+    pattern = _ASPECT_EVIDENCE.get(key)
+    if pattern is not None and pattern.search(text):
+        return True
+    # 结构化字段兜底：numbers 非空说明证据本身带数值；“支持/反对”是显式立场
+    if key == "data":
+        numbers = item.get("numbers")
+        return isinstance(numbers, (list, tuple)) and bool(numbers)
+    if key == "stance":
+        return str(item.get("stance") or "").strip() in {"支持", "反对", "中立"}
     return False
 
 
@@ -158,44 +317,75 @@ def compute_coverage(
     *,
     threshold: float = 0.6,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """计算每个子问题的证据覆盖度。
+    """计算每个子问题的证据覆盖度（主题 + 方面两层判定）。
 
     返回 (coverage_items, summary)：
-    - coverage_items: 每个子问题的 score / covered / matched_terms / evidence_ids；
+    - coverage_items: 每个子问题的 score / covered / matched_terms / evidence_ids /
+      aspects / missing_aspects；
     - summary: total / covered / rate / threshold / uncovered。
     """
     items = [item for item in evidence if isinstance(item, dict)]
-    corpus = " ".join(_evidence_text(item) for item in items)
+    texts = [_evidence_text(item) for item in items]
+    corpus = " ".join(texts)
     coverage: list[dict[str, Any]] = []
     for sub_question in sub_questions:
-        latin, chunks = _coverage_units(sub_question)
+        core = subquestion_core(sub_question)
+        latin, chunks = _coverage_units(core)
+        # 通用词（市场/行业/企业…）不能单独作为主题覆盖依据
+        topic_chunks = [chunk for chunk in chunks if chunk not in _GENERIC_TOPIC_WORDS]
+        if not latin and not topic_chunks:
+            # 主题被“的/与”拆成多个通用词时，退回用子问题的 3 字以上块判断
+            _, fallback_chunks = _coverage_units(sub_question)
+            topic_chunks = [chunk for chunk in fallback_chunks if len(chunk) >= 3][:3]
+        aspects = _aspects_for(sub_question)
         matched_latin = [word for word in latin if word in corpus]
-        matched_chunks = [chunk for chunk in chunks if _chunk_matches(chunk, corpus)]
-        total_units = len(latin) + len(chunks)
-        matched_units = len(matched_latin) + len(matched_chunks)
-        score = matched_units / total_units if total_units else 0.0
+        matched_chunks = [chunk for chunk in topic_chunks if _chunk_matches(chunk, corpus)]
+        missing_aspects = [
+            (key, label)
+            for key, label in aspects
+            if not any(_aspect_matches_item(key, text, item) for text, item in zip(texts, items))
+        ]
+        subject_units = len(latin) + len(topic_chunks)
+        subject_matched = len(matched_latin) + len(matched_chunks)
+        all_aspects_matched = len(aspects) - len(missing_aspects)
+        total_units = subject_units + len(aspects)
+        score = (subject_matched + all_aspects_matched) / total_units if total_units else 0.0
+        # 英文实体必须全部命中；中文主题块命中任意一个即可（剩下的模板词由方面判定兜底）
+        subject_ok = (
+            subject_units > 0
+            and len(matched_latin) == len(latin)
+            and (not topic_chunks or bool(matched_chunks))
+        )
         # 关键英文实体（LangGraph / interrupt / RAG…）缺失时，不能算高覆盖
         if latin and len(matched_latin) < len(latin):
             score = min(score, 0.45)
-        covered = bool(total_units) and score >= threshold
-        matched_terms = [*matched_latin, *matched_chunks]
+        if missing_aspects:
+            score = min(score, 0.5)
+        if not subject_ok:
+            score = min(score, 0.35)
+        covered = bool(total_units) and subject_ok and not missing_aspects and score >= threshold
+        matched_terms = [*matched_latin, *matched_chunks, *(label for _, label in aspects)]
         evidence_ids = [
             index + 1
-            for index, item in enumerate(items)
-            if any(
-                word in _evidence_text(item)
-                for word in matched_latin
+            for index, (item, text) in enumerate(zip(items, texts))
+            if any(word in text for word in matched_latin)
+            or any(_chunk_matches(chunk, text) for chunk in matched_chunks)
+            or any(
+                _aspect_matches_item(key, text, item)
+                for key, label in aspects
+                if (key, label) not in missing_aspects
             )
-            or any(_chunk_matches(chunk, _evidence_text(item)) for chunk in chunks)
         ]
         coverage.append(
             {
                 "sub_question": sub_question,
-                "core": subquestion_core(sub_question),
+                "core": core,
                 "covered": covered,
                 "score": round(score, 3),
                 "matched_terms": matched_terms[:8],
                 "evidence_ids": evidence_ids[:8],
+                "aspects": [label for _, label in aspects],
+                "missing_aspects": [label for _, label in missing_aspects],
             }
         )
     total = len(coverage)

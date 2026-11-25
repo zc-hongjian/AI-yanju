@@ -341,6 +341,8 @@ JUNK_RESULT_HOSTS = {
     "translate.google.com",
     "translate.google.cn",
     "deepl.com",
+    # AI 工具导航/榜单站：正文是工具目录，不是研究证据
+    "ai-bot.cn",
 }
 
 
@@ -1648,7 +1650,17 @@ def draft_review(state: ResearchState) -> dict[str, Any]:
     market = prompts.is_market_question(question)
     sources = _sources_from_pages(state.get("fetched_pages") or [])
     outline = state.get("outline") or {}
-    uncovered = [str(item) for item in outline.get("uncovered") or []]
+    coverage_summary = state.get("coverage_summary") or {}
+    # 未覆盖子问题以覆盖率指标为准（大纲可能给“证据不足”的子问题也分了小节，
+    # 那样 outline.uncovered 会漏掉它，报告的“局限”就会谎称全部覆盖）。
+    uncovered: list[str] = []
+    for item in [
+        *(coverage_summary.get("uncovered") or []),
+        *(outline.get("uncovered") or []),
+    ]:
+        text = str(item).strip()
+        if text and text not in uncovered:
+            uncovered.append(text)
     raw = str(state.get("draft_raw") or state.get("draft_report") or "")
     start = time.perf_counter()
     report: dict[str, Any] = {
